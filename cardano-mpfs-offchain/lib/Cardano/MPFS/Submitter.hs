@@ -27,7 +27,7 @@ data SubmitResult
 
 -- | Interface for submitting transactions to the
 -- blockchain.
-data Submitter m = Submitter
+newtype Submitter m = Submitter
     { submitTx
         :: Tx ConwayEra -> m SubmitResult
     -- ^ Submit a signed transaction

@@ -4,7 +4,7 @@
 -- | MPF Benchmark - Haskell Implementation
 module Main where
 
-import Control.Monad (forM, when)
+import Control.Monad (forM, unless)
 import Data.ByteString (ByteString)
 import Data.ByteString.Char8 qualified as B8
 import Data.Time.Clock (diffUTCTime, getCurrentTime)
@@ -200,7 +200,7 @@ runBenchmark method skipProofs count = do
         Nothing -> putStrLn "Root hash: (empty)"
 
     -- For very large datasets, skip proof generation/verification
-    when (not skipProofs) $ do
+    unless skipProofs $ do
         (proofsGenerated, proofGenTime) <- benchmark ("Generate " ++ show count ++ " proofs") $ do
             pure $! generateProofs testData db
 

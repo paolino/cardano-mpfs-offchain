@@ -7,6 +7,7 @@ module Cardano.MPFS.StateSpec (spec) where
 import Data.IORef (modifyIORef', newIORef, readIORef)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
+import Data.Maybe (isNothing)
 
 import Test.Hspec
     ( Spec
@@ -55,8 +56,8 @@ mkMockTokens = do
                 Map.lookup tid <$> readIORef ref
             , putToken = \tid ts ->
                 modifyIORef' ref (Map.insert tid ts)
-            , removeToken = \tid ->
-                modifyIORef' ref (Map.delete tid)
+            , removeToken =
+                modifyIORef' ref . Map.delete
             , listTokens =
                 Map.keys <$> readIORef ref
             }
@@ -71,8 +72,8 @@ mkMockRequests = do
                 Map.lookup txin <$> readIORef ref
             , putRequest = \txin req ->
                 modifyIORef' ref (Map.insert txin req)
-            , removeRequest = \txin ->
-                modifyIORef' ref (Map.delete txin)
+            , removeRequest =
+                modifyIORef' ref . Map.delete
             , requestsByToken = \tid ->
                 filter
                     (\r -> requestToken r == tid)
@@ -111,7 +112,7 @@ tokensSpec = do
             monadicIO $ do
                 tok <- run mkMockTokens
                 r <- run $ getToken tok tid
-                assert (r == Nothing)
+                assert (isNothing r)
 
     prop "put/get round-trip"
         $ forAll genTokenId
@@ -132,7 +133,7 @@ tokensSpec = do
                     run $ putToken tok tid ts
                     run $ removeToken tok tid
                     r <- run $ getToken tok tid
-                    assert (r == Nothing)
+                    assert (isNothing r)
 
     prop "put appears in listTokens"
         $ forAll genTokenId
@@ -187,7 +188,7 @@ requestsSpec = do
                         run $ putRequest rs txin req
                         run $ removeRequest rs txin
                         r <- run $ getRequest rs txin
-                        assert (r == Nothing)
+                        assert (isNothing r)
 
     prop "requestsByToken filters correctly"
         $ forAll genTokenId
