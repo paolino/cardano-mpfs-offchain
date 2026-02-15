@@ -7,18 +7,25 @@ module Cardano.MPFS.Submitter
     ( -- * Submitter interface
       Submitter (..)
 
-      -- * Placeholder types
-    , SubmitResult
+      -- * Result type
+    , SubmitResult (..)
     ) where
 
-import Cardano.MPFS.Provider (Tx)
+import Data.ByteString (ByteString)
 
--- | Result of submitting a transaction (placeholder).
-type SubmitResult = ()
+import Cardano.MPFS.Types (TxCBOR, TxHash)
+
+-- | Result of submitting a transaction.
+data SubmitResult
+    = -- | Transaction accepted into the mempool
+      Submitted !TxHash
+    | -- | Transaction was rejected
+      Rejected !ByteString
+    -- ^ Rejection reason (UTF-8 encoded)
 
 -- | Interface for submitting transactions to the
 -- blockchain.
 data Submitter m = Submitter
-    { submitTx :: Tx -> m SubmitResult
+    { submitTx :: TxCBOR -> m SubmitResult
     -- ^ Submit a signed transaction
     }

@@ -12,21 +12,29 @@ module Cardano.MPFS.Trie
       -- * Single trie operations
     , Trie (..)
 
-      -- * Placeholder types
-    , Proof
+      -- * Proof
+    , Proof (..)
     ) where
 
 import Data.ByteString (ByteString)
 
 import Cardano.MPFS.Types (Root, TokenId)
 
--- | Merkle proof (placeholder).
-type Proof = ()
+-- | Serialised Merkle inclusion proof.
+-- Opaque at this layer; produced by the trie
+-- implementation and consumed by the transaction
+-- builder for embedding in redeemers.
+newtype Proof = Proof
+    { unProof :: ByteString
+    }
 
 -- | Manager for per-token tries.
 data TrieManager m = TrieManager
     { withTrie
-        :: forall a. TokenId -> (Trie m -> m a) -> m a
+        :: forall a
+         . TokenId
+        -> (Trie m -> m a)
+        -> m a
     -- ^ Run an action with access to a token's trie
     , createTrie :: TokenId -> m ()
     -- ^ Create a new empty trie for a token
@@ -45,6 +53,6 @@ data Trie m = Trie
     -- ^ Look up a value by key
     , getRoot :: m Root
     -- ^ Get current root hash
-    , getProof :: ByteString -> m Proof
+    , getProof :: ByteString -> m (Maybe Proof)
     -- ^ Generate a Merkle proof for a key
     }
