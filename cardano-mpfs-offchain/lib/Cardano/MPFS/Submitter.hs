@@ -13,12 +13,14 @@ module Cardano.MPFS.Submitter
 
 import Data.ByteString (ByteString)
 
-import Cardano.MPFS.Types (TxCBOR, TxHash)
+import Cardano.Ledger.Api.Tx (Tx)
+
+import Cardano.MPFS.Types (ConwayEra, TxId)
 
 -- | Result of submitting a transaction.
 data SubmitResult
     = -- | Transaction accepted into the mempool
-      Submitted !TxHash
+      Submitted !TxId
     | -- | Transaction was rejected
       Rejected !ByteString
     -- ^ Rejection reason (UTF-8 encoded)
@@ -26,6 +28,7 @@ data SubmitResult
 -- | Interface for submitting transactions to the
 -- blockchain.
 data Submitter m = Submitter
-    { submitTx :: TxCBOR -> m SubmitResult
+    { submitTx
+        :: Tx ConwayEra -> m SubmitResult
     -- ^ Submit a signed transaction
     }

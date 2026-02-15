@@ -4,9 +4,8 @@ version:         0.0.0
 synopsis:        Offchain service interfaces for Cardano MPFS
 description:
   Record-of-functions interfaces for the Cardano Merkle
-  Patricia Forestry offchain service. Contains only type
-  definitions and singleton interface records with no
-  implementations.
+  Patricia Forestry offchain service. Uses real
+  cardano-ledger types for all Cardano primitives.
 
 license:         Apache-2.0
 license-file:    LICENSE
@@ -26,8 +25,14 @@ library
   default-language: GHC2021
   hs-source-dirs:   lib
   build-depends:
-    , base        >=4.18 && <5
-    , bytestring  >=0.11 && <0.13
+    , base                  >=4.18 && <5
+    , bytestring            >=0.11 && <0.13
+    , cardano-ledger-api
+    , cardano-ledger-core
+    , cardano-ledger-conway
+    , cardano-ledger-mary
+    , cardano-ledger-binary
+    , cardano-crypto-class
 
   exposed-modules:
     Cardano.MPFS.Context
@@ -38,3 +43,25 @@ library
     Cardano.MPFS.Trie
     Cardano.MPFS.TxBuilder
     Cardano.MPFS.Types
+
+test-suite unit-tests
+  import:             warnings
+  type:               exitcode-stdio-1.0
+  default-language:   GHC2021
+  hs-source-dirs:     test
+  main-is:            main.hs
+  build-depends:
+    , base
+    , bytestring
+    , containers
+    , cardano-mpfs-offchain
+    , cardano-ledger-core
+    , cardano-crypto-class
+    , hspec                >=2.11 && <2.12
+    , QuickCheck           >=2.14 && <2.18
+
+  build-tool-depends:
+    hspec-discover:hspec-discover >=2.11 && <2.12
+  other-modules:
+    Cardano.MPFS.Generators
+    Cardano.MPFS.StateSpec

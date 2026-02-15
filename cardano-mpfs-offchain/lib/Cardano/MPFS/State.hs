@@ -19,9 +19,9 @@ module Cardano.MPFS.State
 
 import Cardano.MPFS.Types
     ( BlockId
-    , OutputRef
     , Request
     , SlotNo
+    , TxIn
     , TokenId
     , TokenState
     )
@@ -52,12 +52,12 @@ data Tokens m = Tokens
 -- | Interface for managing pending requests.
 data Requests m = Requests
     { getRequest
-        :: OutputRef -> m (Maybe Request)
+        :: TxIn -> m (Maybe Request)
     -- ^ Look up a request by its UTxO reference
     , putRequest
-        :: OutputRef -> Request -> m ()
+        :: TxIn -> Request -> m ()
     -- ^ Store a new request
-    , removeRequest :: OutputRef -> m ()
+    , removeRequest :: TxIn -> m ()
     -- ^ Remove a fulfilled or retracted request
     , requestsByToken
         :: TokenId -> m [Request]

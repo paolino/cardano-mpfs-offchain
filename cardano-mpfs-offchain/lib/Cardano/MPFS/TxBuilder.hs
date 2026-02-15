@@ -10,39 +10,48 @@ module Cardano.MPFS.TxBuilder
 
 import Data.ByteString (ByteString)
 
+import Cardano.Ledger.Api.Tx (Tx)
+
 import Cardano.MPFS.Types
-    ( Address
-    , OutputRef
-    , TxCBOR
+    ( Addr
+    , ConwayEra
+    , TxIn
     , TokenId
     )
 
 -- | Interface for constructing transactions for
--- all MPFS protocol operations.
+-- all MPFS protocol operations. Returns full
+-- ledger 'Tx' values ready for signing.
 data TxBuilder m = TxBuilder
     { bootToken
-        :: Address -> m TxCBOR
+        :: Addr -> m (Tx ConwayEra)
     -- ^ Create a new MPFS token
     , requestInsert
         :: TokenId
         -> ByteString
         -> ByteString
-        -> Address
-        -> m TxCBOR
+        -> Addr
+        -> m (Tx ConwayEra)
     -- ^ Request inserting a key-value pair
     , requestDelete
         :: TokenId
         -> ByteString
-        -> Address
-        -> m TxCBOR
+        -> Addr
+        -> m (Tx ConwayEra)
     -- ^ Request deleting a key
     , updateToken
-        :: TokenId -> Address -> m TxCBOR
+        :: TokenId
+        -> Addr
+        -> m (Tx ConwayEra)
     -- ^ Process pending requests for a token
     , retractRequest
-        :: OutputRef -> Address -> m TxCBOR
+        :: TxIn
+        -> Addr
+        -> m (Tx ConwayEra)
     -- ^ Cancel a pending request
     , endToken
-        :: TokenId -> Address -> m TxCBOR
+        :: TokenId
+        -> Addr
+        -> m (Tx ConwayEra)
     -- ^ Retire an MPFS token
     }

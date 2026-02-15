@@ -1,5 +1,5 @@
 {
-  description = "Merkle Patricia Forestry implementation in Haskell";
+  description = "Merkle Patricia Forestry offchain service";
   nixConfig = {
     extra-substituters = [ "https://cache.iog.io" ];
     extra-trusted-public-keys =
@@ -7,73 +7,55 @@
   };
   inputs = {
     haskellNix.url = "github:input-output-hk/haskell.nix";
-    nixpkgs = { follows = "haskellNix/nixpkgs-unstable"; };
+    nixpkgs.follows = "haskellNix/nixpkgs-unstable";
     flake-parts.url = "github:hercules-ci/flake-parts";
-    flake-utils.url = "github:hamishmack/flake-utils/hkm/nested-hydraJobs";
     mkdocs.url = "github:paolino/dev-assets?dir=mkdocs";
     asciinema.url = "github:paolino/dev-assets?dir=asciinema";
+    iohkNix = {
+      url = "github:input-output-hk/iohk-nix";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+    CHaP = {
+      url = "github:intersectmbo/cardano-haskell-packages?ref=repo";
+      flake = false;
+    };
   };
 
-  outputs =
-    inputs@{ self, nixpkgs, flake-utils, haskellNix, mkdocs, asciinema, ... }:
+  outputs = inputs@{ self, nixpkgs, flake-parts, haskellNix
+    , mkdocs, asciinema, iohkNix, CHaP, ... }:
     let
-      lib = nixpkgs.lib;
       version = self.dirtyShortRev or self.shortRev;
-
-      perSystem = system:
-        let
-          pkgs = import nixpkgs {
-            overlays = [ haskellNix.overlay ];
-            inherit system;
-          };
-
-          project = pkgs.haskell-nix.cabalProject' {
-            name = "haskell-mpfs";
-            src = ./.;
-            compiler-nix-name = "ghc984";
-            shell = {
-              tools = {
-                cabal = { index-state = "2025-10-01T00:00:00Z"; };
-                cabal-fmt = { index-state = "2025-10-01T00:00:00Z"; };
-                haskell-language-server = {
-                  index-state = "2025-10-01T00:00:00Z";
-                };
-                hoogle = { index-state = "2025-10-01T00:00:00Z"; };
-                fourmolu = { index-state = "2025-10-01T00:00:00Z"; };
-                hlint = { index-state = "2025-10-01T00:00:00Z"; };
-              };
-              withHoogle = true;
-              buildInputs = [
-                pkgs.just
-                pkgs.nixfmt-classic
-                pkgs.shellcheck
-                pkgs.mkdocs
-                mkdocs.packages.${system}.from-nixpkgs
-                mkdocs.packages.${system}.asciinema-plugin
-                mkdocs.packages.${system}.markdown-callouts
-                mkdocs.packages.${system}.markdown-graphviz
-                asciinema.packages.${system}.compress
-                asciinema.packages.${system}.resize
-                pkgs.asciinema
+      parts = flake-parts.lib.mkFlake { inherit inputs; } {
+        systems = [ "x86_64-linux" "aarch64-darwin" ];
+        perSystem = { system, ... }:
+          let
+            pkgs = import nixpkgs {
+              overlays = [
+                iohkNix.overlays.crypto
+                haskellNix.overlay
+                iohkNix.overlays.haskell-nix-crypto
+                iohkNix.overlays.cardano-lib
               ];
-              shellHook = ''
-                echo "Entering haskell-mpfs dev shell"
-              '';
+              inherit system;
             };
+            project = import ./nix/project.nix {
+              indexState = "2025-12-07T00:00:00Z";
+              inherit CHaP pkgs;
+              mkdocs = mkdocs.packages.${system};
+              asciinema = asciinema.packages.${system};
+            };
+          in {
+            packages = {
+              inherit (project.packages)
+                unit-tests offchain-tests
+                cardano-mpfs-offchain;
+              default = project.packages.haskell-mpfs;
+            };
+            inherit (project) devShells;
           };
-
-        in {
-          packages = {
-            default =
-              project.hsPkgs.haskell-mpfs.components.library;
-            unit-tests =
-              project.hsPkgs.haskell-mpfs.components.tests.unit-tests;
-            cardano-mpfs-offchain =
-              project.hsPkgs.cardano-mpfs-offchain.components.library;
-          };
-          devShells.default = project.shell;
-        };
-
-    in flake-utils.lib.eachSystem
-      [ "x86_64-linux" "aarch64-darwin" ] perSystem;
+      };
+    in {
+      inherit (parts) packages devShells;
+      inherit version;
+    };
 }
