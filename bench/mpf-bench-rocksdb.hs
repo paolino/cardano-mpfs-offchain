@@ -21,7 +21,14 @@ import MPF.Backend.Standalone
     ( MPFStandalone (..)
     , MPFStandaloneCodecs (..)
     )
-import MPF.Hashes (MPFHash, MPFHashing (..), mkMPFHash, mpfHashing, parseMPFHash, renderMPFHash)
+import MPF.Hashes
+    ( MPFHash
+    , MPFHashing (..)
+    , mkMPFHash
+    , mpfHashing
+    , parseMPFHash
+    , renderMPFHash
+    )
 import MPF.Insertion (insertingStream)
 import MPF.Interface
     ( FromHexKV (..)
