@@ -5,6 +5,7 @@ index-state:
 
 packages:
   .
+  cardano-mpfs-offchain/
 
 source-repository-package
   type: git

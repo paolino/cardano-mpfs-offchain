@@ -68,6 +68,8 @@
               project.hsPkgs.haskell-mpfs.components.library;
             unit-tests =
               project.hsPkgs.haskell-mpfs.components.tests.unit-tests;
+            cardano-mpfs-offchain =
+              project.hsPkgs.cardano-mpfs-offchain.components.library;
           };
           devShells.default = project.shell;
         };

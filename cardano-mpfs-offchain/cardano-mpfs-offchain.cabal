@@ -1,0 +1,40 @@
+cabal-version:   3.4
+name:            cardano-mpfs-offchain
+version:         0.0.0
+synopsis:        Offchain service interfaces for Cardano MPFS
+description:
+  Record-of-functions interfaces for the Cardano Merkle
+  Patricia Forestry offchain service. Contains only type
+  definitions and singleton interface records with no
+  implementations.
+
+license:         Apache-2.0
+license-file:    LICENSE
+author:          Paolo Veronelli
+maintainer:      paolo.veronelli@gmail.com
+category:        Cardano
+build-type:      Simple
+
+common warnings
+  ghc-options: -Wall
+  default-extensions:
+    DuplicateRecordFields
+    StrictData
+
+library
+  import:           warnings
+  default-language: GHC2021
+  hs-source-dirs:   lib
+  build-depends:
+    , base        >=4.18 && <5
+    , bytestring  >=0.11 && <0.13
+
+  exposed-modules:
+    Cardano.MPFS.Context
+    Cardano.MPFS.Indexer
+    Cardano.MPFS.Provider
+    Cardano.MPFS.State
+    Cardano.MPFS.Submitter
+    Cardano.MPFS.Trie
+    Cardano.MPFS.TxBuilder
+    Cardano.MPFS.Types
