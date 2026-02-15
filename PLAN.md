@@ -33,19 +33,40 @@ resolution surprises.
 │  UTxO queries via address prefix    │
 │  Mithril bootstrap, ChainSync      │
 ├─────────────────────────────────────┤
-│  Ogmios client (thin)              │
-│  Protocol params + tx submission    │
+│  Node client (node-to-client)      │
+│  Local state query + tx submission  │
 └─────────────────────────────────────┘
 ```
 
-**Decision: No Yaci Store.** We embed `cardano-utxo-csmt` directly.
-It already does ChainSync + Mithril bootstrap + full UTxO set in
-RocksDB. To support UTxO-by-address queries we change the CSMT key
-encoding to `address ++ txId ++ txIx` so prefix scans give us all
-UTxOs at an address. Ogmios is only needed for protocol parameters
-and transaction submission (2 endpoints).
+### Infrastructure decisions
 
-**Runtime stack:** Cardano node + Ogmios (no Yaci Store).
+**No Yaci Store, no Ogmios.** The only external dependency is
+a Cardano node. Everything else is embedded.
+
+**Why this works:** cardano-utxo-csmt already connects to the
+node for ChainSync. The node exposes three mini-protocols on
+its local Unix socket (node-to-client):
+
+1. **ChainSync** — follow the chain block by block (csmt has this)
+2. **LocalStateQuery** — query ledger state (protocol parameters)
+3. **LocalTxSubmission** — submit signed transactions
+
+All three share a single multiplexed connection to the node
+socket. No extra processes, no WebSocket wrappers.
+
+**What we get from each:**
+
+| Need | Source | Why |
+|------|--------|-----|
+| Full UTxO set | csmt ChainSync + Mithril bootstrap | Already done |
+| UTxOs by address | csmt prefix scan (re-keyed) | Key = `addr ++ txId ++ txIx` |
+| Protocol params | LocalStateQuery | Fee coefficients, max tx size, min UTxO, collateral %, execution prices. Cached per epoch (~5 days) |
+| Tx evaluation | LocalStateQuery | Execution unit estimation for Plutus scripts |
+| Tx submission | LocalTxSubmission | Submit signed CBOR to the node mempool |
+| Chain tip | csmt ChainSync | Already tracked |
+| Block/tx info | csmt RocksDB | Stored during ChainSync processing |
+
+**Runtime stack:** Cardano node only.
 
 ## TypeScript Singleton Map
 
@@ -87,13 +108,13 @@ in Haskell (replacing `Promise<T>` with `m a`).
 
 UTxO lookups via cardano-utxo-csmt (address prefix scan on
 the embedded CSMT). Protocol parameters and tx evaluation
-via Ogmios local-state-query.
+via node-to-client local-state-query.
 
 ```
 Provider m = Provider
   { fetchUtxos         :: Address -> m [UTxO]  -- CSMT prefix scan
-  , fetchProtocolParams :: m ProtocolParams     -- Ogmios
-  , evaluateTx         :: TxCBOR -> m ExUnits   -- Ogmios
+  , fetchProtocolParams :: m ProtocolParams     -- node local-state-query
+  , evaluateTx         :: TxCBOR -> m ExUnits   -- node local-state-query
   }
 ```
 
@@ -132,12 +153,12 @@ State m = State
   }
 ```
 
-**4. Indexer** — Ogmios ChainSync follower
+**4. Indexer** — ChainSync follower (via csmt)
 
-WebSocket connection to Ogmios. Follows the chain block by
-block, calling a Process function for each transaction.
-Pausable via mutex (paused during tx building to avoid
-state races).
+Node-to-client ChainSync, reusing the csmt connection.
+Follows the chain block by block, calling a Process
+function for each transaction. Pausable via mutex (paused
+during tx building to avoid state races).
 
 ```
 Indexer m = Indexer
@@ -147,10 +168,10 @@ Indexer m = Indexer
   }
 ```
 
-**5. Submitter** — Ogmios tx submission
+**5. Submitter** — node-to-client tx submission
 
-Separate Ogmios WebSocket connection for submitting signed
-transactions. Stateless, opens a connection per submission.
+Uses LocalTxSubmission mini-protocol on the same node
+socket. No extra connections or processes.
 
 ```
 Submitter m = Submitter
@@ -194,7 +215,7 @@ LevelDB
   -> TrieManager
     -> State
       -> Process (pure function: State + TrieManager -> Tx -> m ())
-        -> Indexer (takes State, Process, Ogmios URL)
+        -> Indexer (takes State, Process, node socket)
           -> Context (bundles everything)
             -> HTTP API (takes Context)
 ```
@@ -260,10 +281,12 @@ so that `seekKey(addressPrefix)` + cursor iteration gives all
 UTxOs at an address. This is a change in `UTxOs.hs` key encoding,
 not in the CSMT library itself.
 
-**What we still need from Ogmios** (thin client, ~100 LOC):
-- `queryLedgerState/protocolParameters` — cached per epoch
-- `submitTransaction` — tx submission
-- `evaluateTransaction` — execution unit estimation
+**Node-to-client mini-protocols** (no Ogmios needed):
+- `LocalStateQuery` — protocol parameters (cached per epoch),
+  tx evaluation (execution units for Plutus scripts)
+- `LocalTxSubmission` — submit signed transactions
+- These share the same multiplexed socket connection that csmt
+  already opens for ChainSync
 
 ### 4. Service Layer
 
@@ -290,10 +313,12 @@ Extract MPF from haskell-csmt. Done.
 - Mock backend for testing
 - Actual backend implementation deferred to Phase 3
 
-### Phase 2 — UTxO Index + Ogmios Client
+### Phase 2 — UTxO Index + Node Client
 - Embed cardano-utxo-csmt as library (Mithril + ChainSync)
 - Add address-prefixed key encoding for UTxO-by-address queries
-- Thin Ogmios client for protocol params + tx submission
+- Add LocalStateQuery for protocol params + tx evaluation
+- Add LocalTxSubmission for tx submission
+- All on the same node socket (no Ogmios)
 
 ### Phase 3 — Transaction Builders
 - Boot transaction (create new MPF instance)
@@ -320,7 +345,7 @@ Extract MPF from haskell-csmt. Done.
    implementation (our transactions are simple)?
 2. **Signing** — use cardano-api signing or keep keys external
    (signingless mode)?
-3. ~~**Indexer**~~ DECIDED — embed cardano-utxo-csmt, no Yaci.
-   ChainSync via csmt, protocol params + submit via Ogmios.
+3. ~~**Indexer**~~ DECIDED — embed cardano-utxo-csmt, no Yaci,
+   no Ogmios. All node communication via node-to-client socket.
 4. **Multi-oracle** — the TypeScript version supports multiple
    oracles. Same for Haskell?
