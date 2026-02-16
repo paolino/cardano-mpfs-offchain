@@ -14,6 +14,12 @@ the [Aiken on-chain implementation](https://github.com/aiken-lang/merkle-patrici
 - **Multiple insertion strategies** — single, batch, chunked, streaming
 - **Pluggable backends** — in-memory (pure) and RocksDB
 
+## Documentation
+
+See [docs/](docs/) for full documentation, including
+[architecture overview](docs/architecture/overview.md) and
+dependency graph.
+
 ## Building
 
 ```bash
