@@ -34,11 +34,14 @@ library
     , cardano-ledger-conway
     , cardano-ledger-core
     , cardano-ledger-mary
+    , cardano-strict-containers
     , containers                             >=0.6  && <0.8
     , merkle-patricia-forestry
     , merkle-patricia-forestry:mpf-test-lib
+    , microlens
 
   exposed-modules:
+    Cardano.MPFS.Balance
     Cardano.MPFS.Context
     Cardano.MPFS.Indexer
     Cardano.MPFS.Mock.Context
@@ -67,15 +70,18 @@ test-suite unit-tests
     , base
     , bytestring
     , cardano-crypto-class
+    , cardano-ledger-api
     , cardano-ledger-core
     , cardano-mpfs-offchain
     , containers
     , hspec                                  >=2.11 && <2.12
     , merkle-patricia-forestry
     , merkle-patricia-forestry:mpf-test-lib
+    , microlens
     , QuickCheck                             >=2.14 && <2.18
 
   other-modules:
+    Cardano.MPFS.BalanceSpec
     Cardano.MPFS.Generators
     Cardano.MPFS.ProofSpec
     Cardano.MPFS.StateSpec
