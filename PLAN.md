@@ -21,7 +21,7 @@ resolution surprises.
 ```mermaid
 flowchart TD
     http["mpfs-service — HTTP service (Servant)"]
-    mpf["MPF trie (haskell-mpf) ✓ DONE\nProofs, insertion, deletion"]
+    mpf["MPF trie (merkle-patricia-forestry) ✓ DONE\nProofs, insertion, deletion"]
     txb["Transaction building interface\nCoin selection, fee estimation\n(record of functions)"]
     csmt["cardano-utxo-csmt (embedded)\nUTxO queries via address prefix\nMithril bootstrap, ChainSync\n(replaces Yaci Store)"]
     node["Node client (node-to-client)\nLocal state query + tx submission"]
@@ -317,6 +317,14 @@ graph LR
 
 ### Phase 0 — MPF Library ✓
 Extract MPF from haskell-csmt. Done.
+
+Completed:
+- Extracted `merkle-patricia-forestry` package from haskell-csmt
+- Pure + RocksDB backends, 16-ary hex trie, Blake2b-256
+- Aiken-compatible CBOR proof serialization (#13, #16)
+- `cardano-mpfs-offchain` service interfaces with mock implementations (#5)
+- Renamed package from `haskell-mpfs` to `merkle-patricia-forestry` (#12)
+- 137 tests passing (unit tests + property tests + cross-validation)
 
 ### Phase 1 — Transaction Building Interface
 - Define `TxBuilder m` record of functions
