@@ -74,6 +74,48 @@ graph LR
 
 Each layer uses a `withX` bracket for resource cleanup guarantees.
 
+## External Dependencies
+
+```mermaid
+graph TD
+    OFFCHAIN["cardano-mpfs-offchain\nService interfaces"]
+    MPF["merkle-patricia-forestry\nMPF trie library"]
+    RKVT["rocksdb-kv-transactions\npaolino/"]
+    KVT["kv-transactions\nsublibrary"]
+    ROCKSDB["rocksdb-haskell-jprupp\nHackage"]
+    CRYPTON["crypton\nBlake2b-256"]
+    CEREAL["cereal\nSerialization"]
+    LENS["lens"]
+    CSMT["cardano-utxo-csmt\nPlanned"]
+    LEDGER["cardano-ledger\nPlanned"]
+
+    OFFCHAIN --> MPF
+    MPF --> RKVT
+    MPF --> KVT
+    MPF --> CRYPTON
+    MPF --> CEREAL
+    MPF --> LENS
+    RKVT --> ROCKSDB
+    RKVT --> KVT
+    OFFCHAIN -.-> CSMT
+    OFFCHAIN -.-> LEDGER
+
+    style OFFCHAIN fill:#e1f5fe
+    style MPF fill:#e8f5e9
+    style RKVT fill:#fff3e0
+    style KVT fill:#fff3e0
+    style CSMT fill:#f3e5f5,stroke-dasharray:5
+    style LEDGER fill:#f3e5f5,stroke-dasharray:5
+```
+
+| Color | Meaning |
+|-------|---------|
+| Blue | Offchain service (interfaces only) |
+| Green | Merkle Patricia Forestry trie library |
+| Orange | Custom repos (paolino/) |
+| Purple dashed | Planned, not yet wired |
+| White | Hackage dependencies |
+
 ## Design Principles
 
 - **No typeclasses** — closed world with explicit records of functions.
