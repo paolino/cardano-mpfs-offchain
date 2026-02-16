@@ -4,9 +4,6 @@
 -- License     : Apache-2.0
 module Cardano.MPFS.StateSpec (spec) where
 
-import Data.IORef (modifyIORef', newIORef, readIORef)
-import Data.Map.Strict (Map)
-import Data.Map.Strict qualified as Map
 import Data.Maybe (isNothing)
 
 import Test.Hspec
@@ -19,9 +16,6 @@ import Test.Hspec.QuickCheck (prop)
 import Test.QuickCheck (forAll, (==>))
 import Test.QuickCheck.Monadic (assert, monadicIO, run)
 
-import Cardano.Ledger.Slot (SlotNo)
-import Cardano.Ledger.TxIn (TxIn)
-
 import Cardano.MPFS.Generators
     ( genBlockId
     , genRequest
@@ -30,69 +24,16 @@ import Cardano.MPFS.Generators
     , genTokenState
     , genTxIn
     )
+import Cardano.MPFS.Mock.State
+    ( mkMockCheckpoints
+    , mkMockRequests
+    , mkMockTokens
+    )
 import Cardano.MPFS.State
     ( Checkpoints (..)
     , Requests (..)
     , Tokens (..)
     )
-import Cardano.MPFS.Types
-    ( BlockId
-    , Request (..)
-    , TokenId
-    , TokenState
-    )
-
--- -----------------------------------------------------------------
--- Mock implementations
--- -----------------------------------------------------------------
-
--- | Create mock 'Tokens' backed by an 'IORef'.
-mkMockTokens :: IO (Tokens IO)
-mkMockTokens = do
-    ref <- newIORef (Map.empty :: Map TokenId TokenState)
-    pure
-        Tokens
-            { getToken = \tid ->
-                Map.lookup tid <$> readIORef ref
-            , putToken = \tid ts ->
-                modifyIORef' ref (Map.insert tid ts)
-            , removeToken =
-                modifyIORef' ref . Map.delete
-            , listTokens =
-                Map.keys <$> readIORef ref
-            }
-
--- | Create mock 'Requests' backed by an 'IORef'.
-mkMockRequests :: IO (Requests IO)
-mkMockRequests = do
-    ref <- newIORef (Map.empty :: Map TxIn Request)
-    pure
-        Requests
-            { getRequest = \txin ->
-                Map.lookup txin <$> readIORef ref
-            , putRequest = \txin req ->
-                modifyIORef' ref (Map.insert txin req)
-            , removeRequest =
-                modifyIORef' ref . Map.delete
-            , requestsByToken = \tid ->
-                filter
-                    (\r -> requestToken r == tid)
-                    . Map.elems
-                    <$> readIORef ref
-            }
-
--- | Create mock 'Checkpoints' backed by an 'IORef'.
-mkMockCheckpoints :: IO (Checkpoints IO)
-mkMockCheckpoints = do
-    ref <-
-        newIORef
-            (Nothing :: Maybe (SlotNo, BlockId))
-    pure
-        Checkpoints
-            { getCheckpoint = readIORef ref
-            , putCheckpoint = \s b ->
-                modifyIORef' ref (const (Just (s, b)))
-            }
 
 -- -----------------------------------------------------------------
 -- Specs
