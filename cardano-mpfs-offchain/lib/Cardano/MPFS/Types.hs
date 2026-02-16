@@ -13,6 +13,7 @@ module Cardano.MPFS.Types
     , Addr
     , TxId
     , TxIn
+    , TxOut
     , Coin (..)
     , MaryValue
     , PolicyID (..)
@@ -47,6 +48,7 @@ module Cardano.MPFS.Types
 import Data.ByteString (ByteString)
 
 import Cardano.Ledger.Address (Addr)
+import Cardano.Ledger.Api.Tx.Out (TxOut)
 import Cardano.Ledger.Coin (Coin (..))
 import Cardano.Ledger.Conway (ConwayEra)
 import Cardano.Ledger.Core (PParams)
