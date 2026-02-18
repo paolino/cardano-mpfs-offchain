@@ -4,8 +4,8 @@
 -- License     : Apache-2.0
 --
 -- A channel-driven LocalStateQuery client that
--- acquires the volatile tip, serves queries from
--- a 'TBQueue', then releases and loops.
+-- waits for a query, acquires the volatile tip,
+-- serves the query batch, then releases and loops.
 module Cardano.MPFS.NodeClient.LocalStateQuery
     ( -- * Client construction
       mkLocalStateQueryClient
@@ -42,8 +42,9 @@ import Ouroboros.Network.Protocol.LocalStateQuery.Type
     )
 
 -- | Build a 'LocalStateQueryClient' driven by the
--- given channel. The client loops: acquire tip,
--- drain the queue, release, repeat.
+-- given channel. The client loops: wait for a query,
+-- acquire volatile tip, drain the queue, release,
+-- repeat.
 mkLocalStateQueryClient
     :: LSQChannel
     -> LocalStateQueryClient
@@ -53,41 +54,33 @@ mkLocalStateQueryClient
         IO
         ()
 mkLocalStateQueryClient ch =
-    LocalStateQueryClient $ pure $ clientIdle ch
+    LocalStateQueryClient $ waitAndAcquire ch
 
--- | Idle state: wait for a query, then acquire.
-clientIdle
-    :: LSQChannel
-    -> ClientStIdle
-        Block
-        BlockPoint
-        (Query Block)
-        IO
-        ()
-clientIdle ch =
-    SendMsgAcquire
-        VolatileTip
-        ClientStAcquiring
-            { recvMsgAcquired = clientAcquired ch
-            , recvMsgFailure = \_failure ->
-                pure $ clientIdle ch
-            }
-
--- | Acquired state: drain and serve queries.
-clientAcquired
+-- | Wait for a query to arrive, then acquire the
+-- volatile tip so we always get fresh state.
+waitAndAcquire
     :: LSQChannel
     -> IO
-        ( ClientStAcquired
+        ( ClientStIdle
             Block
             BlockPoint
             (Query Block)
             IO
             ()
         )
-clientAcquired ch = do
+waitAndAcquire ch = do
     -- Block until at least one query arrives
     req <- atomically $ readTBQueue (lsqRequests ch)
-    serveQuery ch req
+    -- Now acquire the latest volatile tip
+    pure
+        $ SendMsgAcquire
+            VolatileTip
+            ClientStAcquiring
+                { recvMsgAcquired =
+                    serveQuery ch req
+                , recvMsgFailure = \_failure ->
+                    waitAndAcquire ch
+                }
 
 -- | Serve a single query, then check for more.
 serveQuery
@@ -119,11 +112,11 @@ serveQuery ch (SomeLSQQuery query resultVar) =
                         Just next ->
                             serveQuery ch next
                         Nothing ->
-                            -- No more; release
+                            -- No more; release and
+                            -- wait for next batch
                             pure
                                 $ SendMsgRelease
-                                $ pure
-                                $ clientIdle ch
+                                $ waitAndAcquire ch
                 }
 
 -- | Submit a query through the channel and block
