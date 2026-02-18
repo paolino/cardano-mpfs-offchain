@@ -63,10 +63,12 @@ library
     , typed-protocols
 
   exposed-modules:
+    Cardano.MPFS.Application
     Cardano.MPFS.Balance
     Cardano.MPFS.Blueprint
     Cardano.MPFS.Context
     Cardano.MPFS.Indexer
+    Cardano.MPFS.Indexer.Skeleton
     Cardano.MPFS.Mock.Context
     Cardano.MPFS.Mock.Indexer
     Cardano.MPFS.Mock.Provider
