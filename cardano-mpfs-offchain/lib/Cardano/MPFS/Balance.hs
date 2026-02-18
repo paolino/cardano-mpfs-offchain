@@ -1,3 +1,5 @@
+{-# LANGUAGE BangPatterns #-}
+
 -- |
 -- Module      : Cardano.MPFS.Balance
 -- Description : Simple transaction balancing
@@ -21,7 +23,7 @@ import Lens.Micro ((&), (.~), (^.))
 import Cardano.Ledger.Api.Tx
     ( Tx
     , bodyTxL
-    , setMinFeeTx
+    , estimateMinFeeTx
     )
 import Cardano.Ledger.Api.Tx.Body
     ( feeTxBodyL
@@ -53,10 +55,11 @@ data BalanceError
 -- UTxO and a change output.
 --
 -- One additional key witness is assumed for the fee
--- input. The fee is estimated with a placeholder
--- change output carrying the full input value, so
--- the actual fee may be marginally lower than
--- charged (the change output shrinks).
+-- input. The fee is found by iterating
+-- 'setMinFeeTx' to a fixpoint: each round builds
+-- the full transaction (with change output and fee
+-- field set) and re-estimates until the fee
+-- stabilises.
 balanceTx
     :: PParams ConwayEra
     -> (TxIn, TxOut ConwayEra)
@@ -74,38 +77,52 @@ balanceTx pp (feeInput, feeUtxo) changeAddr tx =
                 feeInput
                 (body ^. inputsTxBodyL)
         origOutputs = body ^. outputsTxBodyL
-        placeholder =
-            mkBasicTxOut changeAddr (inject inputCoin)
-        draftBody =
-            body
-                & inputsTxBodyL .~ newInputs
-                & outputsTxBodyL
-                    .~ (origOutputs |> placeholder)
-        draftTx = tx & bodyTxL .~ draftBody
-        -- One extra key witness for the fee input
-        feeEstTx = setMinFeeTx pp draftTx 1
-        fee = feeEstTx ^. bodyTxL . feeTxBodyL
+        -- Build a candidate tx for a given fee.
+        -- Change is clamped to 0 so fee estimation
+        -- works even when funds are insufficient.
+        buildTx f =
+            let Coin avail = inputCoin
+                Coin req = f
+                change = max 0 (avail - req)
+                changeOut =
+                    mkBasicTxOut
+                        changeAddr
+                        (inject (Coin change))
+                finalBody =
+                    body
+                        & inputsTxBodyL
+                            .~ newInputs
+                        & outputsTxBodyL
+                            .~ ( origOutputs
+                                    |> changeOut
+                               )
+                        & feeTxBodyL .~ f
+            in  tx & bodyTxL .~ finalBody
+        -- Iterate until the fee stabilises.
+        go !n currentFee
+            | n > (10 :: Int) =
+                error
+                    "balanceTx: fee did not \
+                    \converge in 10 iterations"
+            | otherwise =
+                let candidate =
+                        buildTx currentFee
+                    newFee =
+                        estimateMinFeeTx
+                            pp
+                            candidate
+                            1 -- key witnesses
+                            0 -- Byron witnesses
+                            0 -- ref scripts bytes
+                in  if newFee <= currentFee
+                        then currentFee
+                        else go (n + 1) newFee
+        initFee = Coin 0
+        fee = go 0 initFee
         Coin available = inputCoin
         Coin required = fee
         changeAmount = available - required
     in  if changeAmount < 0
             then
                 Left (InsufficientFee fee inputCoin)
-            else
-                let changeOut =
-                        mkBasicTxOut
-                            changeAddr
-                            ( inject
-                                (Coin changeAmount)
-                            )
-                    finalBody =
-                        body
-                            & inputsTxBodyL
-                                .~ newInputs
-                            & outputsTxBodyL
-                                .~ ( origOutputs
-                                        |> changeOut
-                                   )
-                            & feeTxBodyL .~ fee
-                in  Right
-                        (tx & bodyTxL .~ finalBody)
+            else Right (buildTx fee)
