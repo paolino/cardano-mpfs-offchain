@@ -12,6 +12,9 @@
 module Cardano.MPFS.Proof
     ( -- * Serialization
       serializeProof
+
+      -- * Conversion to on-chain types
+    , toProofSteps
     ) where
 
 import Data.ByteString (ByteString)
@@ -36,6 +39,11 @@ import MPF.Interface (HexDigit (..))
 import MPF.Proof.Insertion
     ( MPFProof (..)
     , MPFProofStep (..)
+    )
+
+import Cardano.MPFS.OnChain
+    ( Neighbor (..)
+    , ProofStep (..)
     )
 
 -- | Serialize an 'MPFProof' to Aiken-compatible
@@ -131,6 +139,73 @@ encodeStep
                 <> cborBytes key
                 <> cborBytes value
                 <> cborEnd
+
+-- | Convert an 'MPFProof' to on-chain 'ProofStep's.
+--
+-- Steps are reversed from leaf-to-root storage order
+-- to root-to-leaf (same as 'serializeProof').
+toProofSteps
+    :: MPFProof MPFHash -> [ProofStep]
+toProofSteps MPFProof{mpfProofSteps} =
+    map convertStep (reverse mpfProofSteps)
+
+-- | Convert a single 'MPFProofStep' to an on-chain
+-- 'ProofStep'.
+convertStep
+    :: MPFProofStep MPFHash -> ProofStep
+convertStep
+    ProofStepBranch
+        { psbJump
+        , psbPosition
+        , psbSiblingHashes
+        } =
+        let skip =
+                fromIntegral (length psbJump)
+            sparseChildren =
+                buildSparse psbSiblingHashes
+            pos =
+                fromIntegral
+                    (unHexDigit psbPosition)
+            neighborHashes =
+                map renderMPFHash
+                    $ merkleProof sparseChildren pos
+            neighbors = mconcat neighborHashes
+        in  Branch skip neighbors
+convertStep
+    ProofStepFork
+        { psfBranchJump
+        , psfNeighborPrefix
+        , psfNeighborIndex
+        , psfMerkleRoot
+        } =
+        let skip =
+                fromIntegral (length psfBranchJump)
+            nibble =
+                fromIntegral
+                    (unHexDigit psfNeighborIndex)
+            prefix =
+                nibbleBytes psfNeighborPrefix
+            root = renderMPFHash psfMerkleRoot
+        in  Fork
+                skip
+                Neighbor
+                    { neighborNibble = nibble
+                    , neighborPrefix = prefix
+                    , neighborRoot = root
+                    }
+convertStep
+    ProofStepLeaf
+        { pslBranchJump
+        , pslNeighborKeyPath
+        , pslNeighborValueDigest
+        } =
+        let skip =
+                fromIntegral (length pslBranchJump)
+            key =
+                packHexKey pslNeighborKeyPath
+            value =
+                renderMPFHash pslNeighborValueDigest
+        in  Leaf skip key value
 
 -- | Build a sparse 16-element array from sibling
 -- hashes for 'merkleProof'.

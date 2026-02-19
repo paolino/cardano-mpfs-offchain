@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 -- |
 -- Module      : Cardano.MPFS.Trie.Pure
 -- Description : Pure in-memory Trie backed by merkle-patricia-forestry
@@ -43,6 +41,8 @@ import MPF.Test.Lib
     , proofMPFM
     )
 
+import Cardano.MPFS.OnChain (ProofStep)
+import Cardano.MPFS.Proof (serializeProof, toProofSteps)
 import Cardano.MPFS.Trie (Proof (..), Trie (..))
 import Cardano.MPFS.Types (Root (..))
 
@@ -63,6 +63,7 @@ mkPureTrieFromRef ref =
         , lookup = pureLookup ref
         , getRoot = pureGetRoot ref
         , getProof = pureGetProof ref
+        , getProofSteps = pureGetProofSteps ref
         }
 
 -- | Insert a key-value pair. Hashes both key and
@@ -140,4 +141,22 @@ pureGetProof ref k = do
             runMPFPure db (proofMPFM hexKey)
     pure $ case mProof of
         Nothing -> Nothing
-        Just _ -> Just (Proof "mock-proof")
+        Just proof ->
+            Just (Proof (serializeProof proof))
+
+-- | Generate on-chain proof steps for a key.
+pureGetProofSteps
+    :: IORef MPFInMemoryDB
+    -> ByteString
+    -> IO (Maybe [ProofStep])
+pureGetProofSteps ref k = do
+    db <- readIORef ref
+    let hexKey =
+            byteStringToHexKey
+                $ renderMPFHash
+                $ mkMPFHash k
+        (mProof, _) =
+            runMPFPure db (proofMPFM hexKey)
+    pure $ case mProof of
+        Nothing -> Nothing
+        Just proof -> Just (toProofSteps proof)

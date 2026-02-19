@@ -17,6 +17,7 @@ module Cardano.MPFS.Trie
 
 import Data.ByteString (ByteString)
 
+import Cardano.MPFS.OnChain (ProofStep)
 import Cardano.MPFS.Types (Root, TokenId)
 
 -- | Serialised Merkle inclusion proof.
@@ -54,4 +55,7 @@ data Trie m = Trie
     -- ^ Get current root hash
     , getProof :: ByteString -> m (Maybe Proof)
     -- ^ Generate a Merkle proof for a key
+    , getProofSteps
+        :: ByteString -> m (Maybe [ProofStep])
+    -- ^ Generate on-chain proof steps for a key
     }

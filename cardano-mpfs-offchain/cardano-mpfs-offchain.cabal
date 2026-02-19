@@ -94,6 +94,11 @@ library
     Cardano.MPFS.TxBuilder
     Cardano.MPFS.TxBuilder.Config
     Cardano.MPFS.TxBuilder.Real
+    Cardano.MPFS.TxBuilder.Real.Boot
+    Cardano.MPFS.TxBuilder.Real.Internal
+    Cardano.MPFS.TxBuilder.Real.Request
+    Cardano.MPFS.TxBuilder.Real.Retract
+    Cardano.MPFS.TxBuilder.Real.Update
     Cardano.MPFS.Types
 
 test-suite unit-tests
@@ -144,6 +149,7 @@ test-suite e2e-tests
     , cardano-ledger-allegra
     , cardano-ledger-api
     , cardano-ledger-core
+    , cardano-ledger-mary
     , cardano-mpfs-offchain
     , containers
     , directory
@@ -152,10 +158,12 @@ test-suite e2e-tests
     , microlens
     , ouroboros-network-api
     , process
+    , text
     , time
     , unix
 
   other-modules:
+    Cardano.MPFS.E2E.CageSpec
     Cardano.MPFS.E2E.Devnet
     Cardano.MPFS.E2E.ProviderSpec
     Cardano.MPFS.E2E.Setup
