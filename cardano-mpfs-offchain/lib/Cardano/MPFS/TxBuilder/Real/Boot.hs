@@ -1,0 +1,183 @@
+{-# LANGUAGE NumericUnderscores #-}
+
+-- |
+-- Module      : Cardano.MPFS.TxBuilder.Real.Boot
+-- Description : Boot token minting transaction
+-- License     : Apache-2.0
+module Cardano.MPFS.TxBuilder.Real.Boot
+    ( bootTokenImpl
+    ) where
+
+import Data.ByteString.Short qualified as SBS
+import Data.Map.Strict qualified as Map
+import Data.Sequence.Strict qualified as StrictSeq
+import Data.Set qualified as Set
+import Lens.Micro ((&), (.~))
+
+import Cardano.Ledger.Address (Addr)
+import Cardano.Ledger.Alonzo.Scripts (AsIx (..))
+import Cardano.Ledger.Api.Tx
+    ( Tx
+    , mkBasicTx
+    , witsTxL
+    )
+import Cardano.Ledger.Api.Tx.Body
+    ( collateralInputsTxBodyL
+    , inputsTxBodyL
+    , mintTxBodyL
+    , mkBasicTxBody
+    , outputsTxBodyL
+    )
+import Cardano.Ledger.Api.Tx.Out
+    ( datumTxOutL
+    , mkBasicTxOut
+    )
+import Cardano.Ledger.Api.Tx.Wits
+    ( Redeemers (..)
+    , rdmrsTxWitsL
+    , scriptTxWitsL
+    )
+import Cardano.Ledger.Conway.Scripts
+    ( ConwayPlutusPurpose (..)
+    )
+import Cardano.Ledger.Core (hashScript)
+import Cardano.Ledger.Mary.Value
+    ( MaryValue (..)
+    , MultiAsset (..)
+    )
+import PlutusTx.Builtins.Internal
+    ( BuiltinByteString (..)
+    )
+
+import Cardano.MPFS.Balance (balanceTx)
+import Cardano.MPFS.OnChain
+    ( CageDatum (..)
+    , Mint (..)
+    , MintRedeemer (..)
+    , OnChainRoot (..)
+    , OnChainTokenState (..)
+    , cageAddr
+    , cagePolicyId
+    , deriveAssetName
+    )
+import Cardano.MPFS.Provider (Provider (..))
+import Cardano.MPFS.TxBuilder.Config
+    ( CageConfig (..)
+    )
+import Cardano.MPFS.TxBuilder.Real.Internal
+import Cardano.MPFS.Types
+    ( AssetName (..)
+    , Coin (..)
+    , ConwayEra
+    )
+
+-- | Build a boot-token minting transaction.
+--
+-- Picks a wallet UTxO as seed for the asset name,
+-- mints +1 token at the cage policy, and creates
+-- a State UTxO with empty root and maxFee.
+bootTokenImpl
+    :: CageConfig
+    -> Provider IO
+    -> Addr
+    -> IO (Tx ConwayEra)
+bootTokenImpl cfg prov addr = do
+    pp <- queryProtocolParams prov
+    utxos <- queryUTxOs prov addr
+    case utxos of
+        [] -> error "bootToken: no UTxOs"
+        (seedUtxo : rest) -> do
+            let (seedRef, _seedOut) = seedUtxo
+                feeUtxo = case rest of
+                    [] -> seedUtxo
+                    (u : _) -> u
+            -- 1. Derive asset name from seed
+            let onChainRef = txInToRef seedRef
+                assetNameBs =
+                    deriveAssetName onChainRef
+                assetName =
+                    AssetName
+                        (SBS.toShort assetNameBs)
+            -- 2. Build mint value (+1 token)
+            let mintMA =
+                    MultiAsset
+                        $ Map.singleton
+                            cagePolicyId
+                        $ Map.singleton
+                            assetName
+                            1
+            -- 3. Build output datum
+            let stateDatum =
+                    StateDatum
+                        OnChainTokenState
+                            { stateOwner =
+                                BuiltinByteString
+                                    (addrKeyHashBytes addr)
+                            , stateRoot =
+                                OnChainRoot emptyRoot
+                            , stateMaxFee =
+                                let Coin c =
+                                        defaultMaxFee cfg
+                                in  c
+                            , stateProcessTime =
+                                defaultProcessTime cfg
+                            , stateRetractTime =
+                                defaultRetractTime cfg
+                            }
+                datumData = toPlcData stateDatum
+            -- 4. Build output with ada + token
+            let scriptAddr =
+                    cageAddr (network cfg)
+                outValue =
+                    MaryValue
+                        (Coin 2_000_000)
+                        mintMA
+                txOut =
+                    mkBasicTxOut
+                        scriptAddr
+                        outValue
+                        & datumTxOutL
+                            .~ mkInlineDatum
+                                datumData
+            -- 5. Build script + redeemer
+            let script = mkCageScript cfg
+                scriptHash = hashScript script
+                redeemer =
+                    Minting (Mint onChainRef)
+                mintPurpose =
+                    ConwayMinting (AsIx 0)
+                redeemers =
+                    Redeemers
+                        $ Map.singleton
+                            mintPurpose
+                            ( toLedgerData redeemer
+                            , defaultMintExUnits
+                            )
+            -- 6. Build tx body
+            let body =
+                    mkBasicTxBody
+                        & inputsTxBodyL
+                            .~ Set.singleton
+                                seedRef
+                        & outputsTxBodyL
+                            .~ StrictSeq.singleton
+                                txOut
+                        & mintTxBodyL .~ mintMA
+                        & collateralInputsTxBodyL
+                            .~ Set.singleton
+                                (fst feeUtxo)
+                tx =
+                    mkBasicTx body
+                        & witsTxL . scriptTxWitsL
+                            .~ Map.singleton
+                                scriptHash
+                                script
+                        & witsTxL . rdmrsTxWitsL
+                            .~ redeemers
+            -- 7. Balance
+            case balanceTx pp feeUtxo addr tx of
+                Left err ->
+                    error
+                        $ "bootToken: "
+                            <> show err
+                Right balanced -> pure balanced
