@@ -27,7 +27,7 @@ source-repository-package
 source-repository-package
   type: git
   location: https://github.com/paolino/cardano-utxo-csmt
-  tag: ca72ea4800539028f045f215ec9da1af2fb7ec2a
+  tag: 69278cc7e6b14a3f43e5f5ba3f84a0e200c90e39
 
 source-repository-package
   type: git
