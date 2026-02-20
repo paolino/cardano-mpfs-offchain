@@ -74,8 +74,7 @@ import Cardano.Ledger.Alonzo.Scripts
     , mkPlutusScript
     )
 import Cardano.Ledger.Alonzo.Tx
-    ( ScriptIntegrity (..)
-    , ScriptIntegrityHash
+    ( ScriptIntegrityHash
     , hashScriptIntegrity
     )
 import Cardano.Ledger.Alonzo.TxWits
@@ -430,9 +429,4 @@ computeScriptIntegrity pp rdmrs =
             Set.singleton
                 (getLanguageView pp PlutusV3)
         emptyDats = TxDats mempty
-    in  SJust
-            $ hashScriptIntegrity
-            $ ScriptIntegrity
-                rdmrs
-                emptyDats
-                langViews
+    in  hashScriptIntegrity langViews rdmrs emptyDats

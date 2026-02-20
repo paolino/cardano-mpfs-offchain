@@ -23,3 +23,28 @@ source-repository-package
   location: https://github.com/paolino/rocksdb-kv-transactions
   tag: 2e151146f8bddcbc2ae694e451692e5c51b337ac
   --sha256: sha256-hhgKUAApaBw2YBBLGqjgj8ZP1tbfAWuqRi1AJcez2jE=
+
+source-repository-package
+  type: git
+  location: https://github.com/paolino/cardano-utxo-csmt
+  tag: ca72ea4800539028f045f215ec9da1af2fb7ec2a
+
+source-repository-package
+  type: git
+  location: https://github.com/paolino/haskell-csmt
+  tag: 7da179e86f64cacabf5bee730d84e9153bc37a48
+
+source-repository-package
+  type: git
+  location: https://github.com/paolino/cardano-read-ledger
+  tag: 2a9521e9282e4955f5454847c3f87eb7e7ac1730
+  --sha256: sha256-g4pY67U7PqJ8DIKmhYImMs7FW3NmQFKPl4PYqMQT+sE=
+
+source-repository-package
+  type: git
+  location: https://github.com/paolino/contra-tracer-contrib
+  tag: 9c2555a5e6d72fdd55eb1e13cff812d72ea41913
+  --sha256: sha256-7kThad3EitpJukEUhzMZ/sUv+z9bfwQYLHWin1XCSQ8=
+
+-- Enable iohk flag for contra-tracer-contrib to use CHaP's simple API
+constraints: contra-tracer-contrib +iohk
