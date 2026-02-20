@@ -1,5 +1,3 @@
-{-# LANGUAGE LambdaCase #-}
-
 -- |
 -- Module      : Cardano.MPFS.Indexer.CageEventSpec
 -- Description : Tests for CageEvent inverse operations
