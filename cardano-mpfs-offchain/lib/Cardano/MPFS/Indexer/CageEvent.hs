@@ -1,6 +1,5 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE LambdaCase #-}
-{-# LANGUAGE OverloadedStrings #-}
 
 -- |
 -- Module      : Cardano.MPFS.Indexer.CageEvent
@@ -91,9 +90,7 @@ inversesOf lookupToken _lookupReq = \case
                     [InvRestoreRoot tid (root ts)]
                 Nothing -> []
             restoreReqs =
-                map
-                    (\txIn -> InvRemoveRequest txIn)
-                    consumed
+                map InvRemoveRequest consumed
         in  restoreRoot ++ restoreReqs
     CageRetract txIn ->
         [InvRemoveRequest txIn]
