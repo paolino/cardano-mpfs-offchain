@@ -90,9 +90,10 @@ inversesOf lookupToken _lookupReq = \case
                 Just ts ->
                     [InvRestoreRoot tid (root ts)]
                 Nothing -> []
-            restoreReqs = map
-                (\txIn -> InvRemoveRequest txIn)
-                consumed
+            restoreReqs =
+                map
+                    (\txIn -> InvRemoveRequest txIn)
+                    consumed
         in  restoreRoot ++ restoreReqs
     CageRetract txIn ->
         [InvRemoveRequest txIn]

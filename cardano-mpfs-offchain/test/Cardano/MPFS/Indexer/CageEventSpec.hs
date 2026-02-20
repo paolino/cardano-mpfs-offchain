@@ -45,18 +45,21 @@ import Cardano.MPFS.Types
 spec :: Spec
 spec = describe "CageEvent" $ do
     describe "inversesOf" $ do
-        it "boot produces InvRemoveToken" $
-            forAll genBoot $ \(tid, ts) ->
+        it "boot produces InvRemoveToken"
+            $ forAll genBoot
+            $ \(tid, ts) ->
                 inversesOf noTokens noReqs (CageBoot tid ts)
                     `shouldBe` [InvRemoveToken tid]
 
-        it "request produces InvRemoveRequest" $
-            forAll genReqEvent $ \(txIn, req) ->
+        it "request produces InvRemoveRequest"
+            $ forAll genReqEvent
+            $ \(txIn, req) ->
                 inversesOf noTokens noReqs (CageRequest txIn req)
                     `shouldBe` [InvRemoveRequest txIn]
 
-        it "retract produces InvRemoveRequest" $
-            forAll genTxIn $ \txIn ->
+        it "retract produces InvRemoveRequest"
+            $ forAll genTxIn
+            $ \txIn ->
                 inversesOf noTokens noReqs (CageRetract txIn)
                     `shouldBe` [InvRemoveRequest txIn]
 
@@ -70,8 +73,9 @@ spec = describe "CageEvent" $ do
                         (CageBurn tid)
                         `shouldBe` [InvRestoreToken tid ts]
 
-        it "burn with unknown token produces empty" $
-            forAll genTokenId $ \tid ->
+        it "burn with unknown token produces empty"
+            $ forAll genTokenId
+            $ \tid ->
                 inversesOf noTokens noReqs (CageBurn tid)
                     `shouldBe` []
 
@@ -90,7 +94,8 @@ spec = describe "CageEvent" $ do
                                         : map InvRemoveRequest consumed
                                    )
 
-        it "update with unknown token produces only InvRemoveRequest per consumed"
+        it
+            "update with unknown token produces only InvRemoveRequest per consumed"
             $ forAll genUpdateUnknown
             $ \(tid, newRoot, consumed) ->
                 inversesOf
