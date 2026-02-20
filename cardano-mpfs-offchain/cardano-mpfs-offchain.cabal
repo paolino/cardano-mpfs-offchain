@@ -28,10 +28,10 @@ library
   default-language: GHC2021
   hs-source-dirs:   lib
   build-depends:
-    , aeson                                  >=2.1  && <2.3
+    , aeson                                    >=2.1  && <2.3
     , async
-    , base                                   >=4.18 && <5
-    , bytestring                             >=0.11 && <0.13
+    , base                                     >=4.18 && <5
+    , bytestring                               >=0.11 && <0.13
     , cardano-crypto-class
     , cardano-ledger-allegra
     , cardano-ledger-alonzo
@@ -43,9 +43,11 @@ library
     , cardano-ledger-mary
     , cardano-strict-containers
     , cardano-utxo-csmt:library
-    , containers                             >=0.6  && <0.8
+    , cborg
+    , containers                               >=0.6  && <0.8
     , contra-tracer
     , crypton
+    , lens
     , memory
     , merkle-patricia-forestry
     , merkle-patricia-forestry:mpf-test-lib
@@ -61,9 +63,10 @@ library
     , plutus-core
     , plutus-ledger-api
     , plutus-tx
+    , rocksdb-kv-transactions:kv-transactions
     , serialise
     , stm
-    , text                                   >=2.0  && <2.2
+    , text                                     >=2.0  && <2.2
     , time
     , typed-protocols
 
@@ -74,6 +77,9 @@ library
     Cardano.MPFS.Context
     Cardano.MPFS.Indexer
     Cardano.MPFS.Indexer.CageEvent
+    Cardano.MPFS.Indexer.Codecs
+    Cardano.MPFS.Indexer.Columns
+    Cardano.MPFS.Indexer.Persistent
     Cardano.MPFS.Indexer.Skeleton
     Cardano.MPFS.Mock.Context
     Cardano.MPFS.Mock.Indexer
@@ -122,6 +128,7 @@ test-suite unit-tests
     , cardano-mpfs-offchain
     , containers
     , hspec                                  >=2.11 && <2.12
+    , lens
     , merkle-patricia-forestry
     , merkle-patricia-forestry:mpf-test-lib
     , microlens
@@ -134,6 +141,7 @@ test-suite unit-tests
     Cardano.MPFS.BalanceSpec
     Cardano.MPFS.Generators
     Cardano.MPFS.Indexer.CageEventSpec
+    Cardano.MPFS.Indexer.CodecsSpec
     Cardano.MPFS.OnChainSpec
     Cardano.MPFS.ProofSpec
     Cardano.MPFS.StateSpec
