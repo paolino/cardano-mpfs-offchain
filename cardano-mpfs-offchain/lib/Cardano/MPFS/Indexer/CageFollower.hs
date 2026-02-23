@@ -21,6 +21,9 @@ module Cardano.MPFS.Indexer.CageFollower
       -- * Rollback
     , applyCageInverses
 
+      -- * Transaction detection
+    , detectFromTx
+
       -- * Transaction extraction
     , extractConwayTxs
     ) where
