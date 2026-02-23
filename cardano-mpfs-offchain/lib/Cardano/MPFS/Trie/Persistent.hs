@@ -15,6 +15,7 @@
 module Cardano.MPFS.Trie.Persistent
     ( -- * Construction
       mkPersistentTrieManager
+    , withPersistentTrieManager
     ) where
 
 import Control.Lens (Prism')
@@ -48,7 +49,8 @@ import Database.KV.Transaction
 import Database.RocksDB
     ( BatchOp (..)
     , ColumnFamily
-    , DB
+    , Config (..)
+    , DB (..)
     , createIterator
     , destroyIterator
     , getCF
@@ -58,6 +60,7 @@ import Database.RocksDB
     , iterPrev
     , iterSeek
     , iterValid
+    , withDBCF
     , write
     )
 
@@ -139,6 +142,47 @@ mkPersistentTrieManager db nodesCF kvCF = do
                     kvCF
                     knownRef
             }
+
+-- | Bracket that opens a RocksDB database, creates
+-- the @nodes@ and @kv@ column families, builds a
+-- persistent 'TrieManager IO', runs the action, and
+-- closes the database.
+withPersistentTrieManager
+    :: FilePath
+    -> (TrieManager IO -> IO a)
+    -> IO a
+withPersistentTrieManager path action =
+    withDBCF
+        path
+        defaultConfig
+        [ ("nodes", defaultConfig)
+        , ("kv", defaultConfig)
+        ]
+        $ \db@DB{columnFamilies} ->
+            case columnFamilies of
+                [nodesCF, kvCF] -> do
+                    mgr <-
+                        mkPersistentTrieManager
+                            db
+                            nodesCF
+                            kvCF
+                    action mgr
+                _ ->
+                    error
+                        "withPersistentTrieManager: \
+                        \expected 2 column families"
+
+-- | Default RocksDB configuration.
+defaultConfig :: Config
+defaultConfig =
+    Config
+        { createIfMissing = True
+        , errorIfExists = False
+        , paranoidChecks = False
+        , maxFiles = Nothing
+        , prefixLength = Nothing
+        , bloomFilter = False
+        }
 
 -- | Serialize a 'TokenId' to a prefix byte string.
 tokenPrefix :: TokenId -> ByteString

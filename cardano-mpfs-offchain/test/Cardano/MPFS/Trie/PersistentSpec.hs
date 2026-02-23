@@ -7,8 +7,10 @@
 --
 -- Runs the parameterized 'TrieSpec' and
 -- 'TrieManagerSpec' suites against the persistent
--- RocksDB backend. The RocksDB handle is provided
--- by the caller (typically the test main).
+-- RocksDB backend. Also includes property-based
+-- tests comparing persistent and pure backends,
+-- and persistence-specific tests verifying data
+-- survives DB close/reopen cycles.
 module Cardano.MPFS.Trie.PersistentSpec
     ( -- * Test suite
       spec
@@ -17,13 +19,37 @@ module Cardano.MPFS.Trie.PersistentSpec
     , withTestDB
     ) where
 
+import Control.Monad (forM_, void)
+import Data.ByteString (ByteString)
+import Data.ByteString qualified as B
 import Data.ByteString.Short qualified as SBS
 import Data.IORef
     ( IORef
     , atomicModifyIORef'
     )
+import Data.List (nubBy)
+import Data.Maybe (isJust)
 import Data.Word (Word8)
-import Test.Hspec (Spec, describe)
+import Test.Hspec
+    ( Spec
+    , describe
+    , it
+    , shouldBe
+    , shouldSatisfy
+    )
+import Test.QuickCheck
+    ( Gen
+    , Property
+    , choose
+    , forAll
+    , ioProperty
+    , listOf1
+    , property
+    , shuffle
+    , vectorOf
+    , (===)
+    , (==>)
+    )
 
 import Cardano.Ledger.Mary.Value (AssetName (..))
 import Database.RocksDB
@@ -32,10 +58,25 @@ import Database.RocksDB
     , DB (..)
     , withDBCF
     )
-import System.IO.Temp (withSystemTempDirectory)
+import System.IO.Temp
+    ( withSystemTempDirectory
+    )
+
+import MPF.Hashes
+    ( mkMPFHash
+    , renderMPFHash
+    )
+import MPF.Test.Lib
+    ( encodeHex
+    , expectedFullTrieRoot
+    , fruitsTestData
+    , getRootHashM
+    , insertByteStringM
+    , runMPFPure'
+    )
 
 import Cardano.MPFS.Trie
-    ( Trie
+    ( Trie (..)
     , TrieManager (..)
     )
 import Cardano.MPFS.Trie.Persistent
@@ -44,8 +85,13 @@ import Cardano.MPFS.Trie.Persistent
 import Cardano.MPFS.TrieManagerSpec qualified as TrieManagerSpec
 import Cardano.MPFS.TrieSpec qualified as TrieSpec
 import Cardano.MPFS.Types
-    ( TokenId (..)
+    ( Root (..)
+    , TokenId (..)
     )
+
+-- ---------------------------------------------------------
+-- RocksDB config & helpers
+-- ---------------------------------------------------------
 
 -- | Default config for test RocksDB.
 testConfig :: Config
@@ -59,6 +105,10 @@ testConfig =
         , bloomFilter = False
         }
 
+-- | Column family definitions for tests.
+testCFs :: [(String, Config)]
+testCFs = [("nodes", testConfig), ("kv", testConfig)]
+
 -- | Run an action with a temporary RocksDB that has
 -- "nodes" and "kv" column families.
 withTestDB
@@ -66,49 +116,101 @@ withTestDB
     -> IO a
 withTestDB action =
     withSystemTempDirectory "mpfs-test" $ \dir ->
-        withDBCF
-            dir
-            testConfig
-            [ ("nodes", testConfig)
-            , ("kv", testConfig)
-            ]
-            $ \db@DB{columnFamilies = cfs} ->
-                case cfs of
-                    [nodesCF, kvCF] ->
-                        action db nodesCF kvCF
-                    _ ->
-                        error
-                            "Expected 2 column \
-                            \families"
+        withTestDBAt dir action
 
--- | Run all persistent trie tests.
-spec
-    :: DB
-    -> ColumnFamily
-    -> ColumnFamily
-    -> IORef Int
-    -- ^ Counter for unique token IDs
-    -> Spec
-spec db nodesCF kvCF counterRef = do
-    describe "Persistent Trie" $ do
-        TrieSpec.spec
-            ( newPersistentTrie
-                db
-                nodesCF
-                kvCF
-                counterRef
-            )
-    describe "Persistent TrieManager" $ do
-        TrieManagerSpec.spec
-            ( mkPersistentTrieManager
-                db
-                nodesCF
-                kvCF
-            )
+-- | Open a RocksDB at a specific path with the
+-- standard column families. Used for reopen tests
+-- where the same directory is opened multiple times.
+withTestDBAt
+    :: FilePath
+    -> ( DB
+         -> ColumnFamily
+         -> ColumnFamily
+         -> IO a
+       )
+    -> IO a
+withTestDBAt dir action =
+    withDBCF dir testConfig testCFs
+        $ \db@DB{columnFamilies = cfs} ->
+            case cfs of
+                [nodesCF, kvCF] ->
+                    action db nodesCF kvCF
+                _ ->
+                    error
+                        "Expected 2 column \
+                        \families"
 
--- | Create a fresh persistent 'Trie IO' for each
--- test. Uses the counter to generate unique token
--- IDs, ensuring test isolation.
+-- ---------------------------------------------------------
+-- Generators
+-- ---------------------------------------------------------
+
+-- | Generate a random ByteString key.
+genKeyBytes :: Gen ByteString
+genKeyBytes =
+    B.pack <$> listOf1 (choose (0, 255))
+
+-- | Generate a random ByteString value.
+genValue :: Gen ByteString
+genValue =
+    B.pack <$> listOf1 (choose (0, 255))
+
+-- | Hash key bytes (Aiken convention).
+hashKey :: ByteString -> ByteString
+hashKey = renderMPFHash . mkMPFHash
+
+-- | Generate unique key-value pairs (unique by
+-- hashed key).
+genUniqueKVs :: Gen [(ByteString, ByteString)]
+genUniqueKVs = do
+    kvs <-
+        listOf1
+            ((,) <$> genKeyBytes <*> genValue)
+    pure
+        $ nubBy
+            ( \(k1, _) (k2, _) ->
+                hashKey k1 == hashKey k2
+            )
+            kvs
+
+-- ---------------------------------------------------------
+-- Token ID helpers
+-- ---------------------------------------------------------
+
+-- | Generate a unique 'TokenId' from a counter.
+nextTokenId :: IORef Int -> IO TokenId
+nextTokenId ref =
+    atomicModifyIORef' ref $ \n ->
+        ( n + 1
+        , TokenId
+            $ AssetName
+            $ SBS.pack
+            $ encodeInt n
+        )
+
+-- | Encode an 'Int' as bytes.
+encodeInt :: Int -> [Word8]
+encodeInt n =
+    [ fromIntegral (n `div` 256)
+    , fromIntegral (n `mod` 256)
+    ]
+
+-- | Fixed token IDs for reopen tests (safe because
+-- each reopen test uses its own temp directory).
+reopenTidA :: TokenId
+reopenTidA =
+    TokenId (AssetName (SBS.pack [42, 1]))
+
+reopenTidB :: TokenId
+reopenTidB =
+    TokenId (AssetName (SBS.pack [42, 2]))
+
+-- ---------------------------------------------------------
+-- Fresh persistent trie construction
+-- ---------------------------------------------------------
+
+-- | Create a fresh persistent 'Trie IO' for a test.
+-- Uses the counter to generate a unique 'TokenId',
+-- ensuring isolation across test iterations.
 newPersistentTrie
     :: DB
     -> ColumnFamily
@@ -121,20 +223,610 @@ newPersistentTrie db nodesCF kvCF counterRef = do
     createTrie tm tid
     withTrie tm tid pure
 
--- | Generate a unique 'TokenId'.
-nextTokenId :: IORef Int -> IO TokenId
-nextTokenId ref =
-    atomicModifyIORef' ref $ \n ->
-        ( n + 1
-        , TokenId
-            $ AssetName
-            $ SBS.pack
-            $ encodeInt n
-        )
+-- ---------------------------------------------------------
+-- Top-level spec
+-- ---------------------------------------------------------
 
--- | Encode an 'Int' as bytes for unique token names.
-encodeInt :: Int -> [Word8]
-encodeInt n =
-    [ fromIntegral (n `div` 256)
-    , fromIntegral (n `mod` 256)
-    ]
+-- | Run all persistent trie tests.
+spec
+    :: DB
+    -> ColumnFamily
+    -> ColumnFamily
+    -> IORef Int
+    -> Spec
+spec db nodesCF kvCF counterRef = do
+    describe "Persistent Trie"
+        $ TrieSpec.spec
+            ( newPersistentTrie
+                db
+                nodesCF
+                kvCF
+                counterRef
+            )
+    describe "Persistent TrieManager"
+        $ TrieManagerSpec.spec
+            ( mkPersistentTrieManager
+                db
+                nodesCF
+                kvCF
+            )
+    describe "Persistent properties"
+        $ propertySpec
+            db
+            nodesCF
+            kvCF
+            counterRef
+    describe "Persistence-specific"
+        $ persistenceSpec
+            db
+            nodesCF
+            kvCF
+            counterRef
+
+-- ---------------------------------------------------------
+-- Property-based tests
+-- ---------------------------------------------------------
+
+propertySpec
+    :: DB
+    -> ColumnFamily
+    -> ColumnFamily
+    -> IORef Int
+    -> Spec
+propertySpec db nodesCF kvCF counterRef = do
+    it "same root as pure backend"
+        $ property
+        $ propPureEquivalentRoot
+            db
+            nodesCF
+            kvCF
+            counterRef
+
+    it "insertion order independence"
+        $ property
+        $ propInsertOrderPersistent
+            db
+            nodesCF
+            kvCF
+            counterRef
+
+    it "deleted key not verifiable"
+        $ property
+        $ propDeleteRemovesPersistent
+            db
+            nodesCF
+            kvCF
+            counterRef
+
+    it "deletion preserves siblings"
+        $ property
+        $ propDeletePreservesSiblingsPersistent
+            db
+            nodesCF
+            kvCF
+            counterRef
+
+    it "per-token isolation"
+        $ property
+        $ propTokenIsolation
+            db
+            nodesCF
+            kvCF
+            counterRef
+
+    it "createTrie overwrites existing"
+        $ property
+        $ propCreateOverwrites
+            db
+            nodesCF
+            kvCF
+            counterRef
+
+    it "delete then re-insert restores root"
+        $ property
+        $ propDeleteInsertRoundtrip
+            db
+            nodesCF
+            kvCF
+            counterRef
+
+-- | Same operations produce same root on pure and
+-- persistent backends.
+propPureEquivalentRoot
+    :: DB
+    -> ColumnFamily
+    -> ColumnFamily
+    -> IORef Int
+    -> Property
+propPureEquivalentRoot
+    db
+    nodesCF
+    kvCF
+    counterRef =
+        forAll genUniqueKVs $ \kvs ->
+            not (null kvs) ==>
+                ioProperty $ do
+                    let (mRoot, _) = runMPFPure' $ do
+                            forM_ kvs
+                                $ uncurry
+                                    insertByteStringM
+                            getRootHashM
+                        pureRoot =
+                            maybe
+                                B.empty
+                                renderMPFHash
+                                mRoot
+                    trie <-
+                        newPersistentTrie
+                            db
+                            nodesCF
+                            kvCF
+                            counterRef
+                    forM_ kvs
+                        $ uncurry (insert trie)
+                    Root persistRoot <- getRoot trie
+                    pure (pureRoot === persistRoot)
+
+-- | Insertion order doesn't affect root hash on
+-- the persistent backend.
+propInsertOrderPersistent
+    :: DB
+    -> ColumnFamily
+    -> ColumnFamily
+    -> IORef Int
+    -> Property
+propInsertOrderPersistent
+    db
+    nodesCF
+    kvCF
+    counterRef =
+        forAll genUniqueKVs $ \kvs ->
+            length kvs >= 2 ==>
+                forAll (shuffle kvs) $ \shuffled ->
+                    ioProperty $ do
+                        trie1 <-
+                            newPersistentTrie
+                                db
+                                nodesCF
+                                kvCF
+                                counterRef
+                        forM_ kvs
+                            $ uncurry (insert trie1)
+                        root1 <- getRoot trie1
+
+                        trie2 <-
+                            newPersistentTrie
+                                db
+                                nodesCF
+                                kvCF
+                                counterRef
+                        forM_ shuffled
+                            $ uncurry (insert trie2)
+                        root2 <- getRoot trie2
+                        pure (root1 === root2)
+
+-- | Deleted key cannot be looked up on a
+-- non-empty persistent trie.
+propDeleteRemovesPersistent
+    :: DB
+    -> ColumnFamily
+    -> ColumnFamily
+    -> IORef Int
+    -> Property
+propDeleteRemovesPersistent
+    db
+    nodesCF
+    kvCF
+    counterRef =
+        forAll genUniqueKVs $ \bg ->
+            not (null bg) ==>
+                forAll genKeyBytes $ \keyBs ->
+                    forAll genValue $ \valBs ->
+                        let hk = hashKey keyBs
+                            noCollision =
+                                all
+                                    ( (/= hk)
+                                        . hashKey
+                                        . fst
+                                    )
+                                    bg
+                        in  noCollision ==>
+                                ioProperty $ do
+                                    trie <-
+                                        newPersistentTrie
+                                            db
+                                            nodesCF
+                                            kvCF
+                                            counterRef
+                                    forM_ bg
+                                        $ uncurry
+                                            (insert trie)
+                                    _ <-
+                                        insert
+                                            trie
+                                            keyBs
+                                            valBs
+                                    _ <-
+                                        Cardano.MPFS.Trie.delete
+                                            trie
+                                            keyBs
+                                    mVal <-
+                                        Cardano.MPFS.Trie.lookup
+                                            trie
+                                            keyBs
+                                    pure
+                                        (mVal === Nothing)
+
+-- | Deleting one key preserves siblings on a
+-- non-empty persistent trie.
+propDeletePreservesSiblingsPersistent
+    :: DB
+    -> ColumnFamily
+    -> ColumnFamily
+    -> IORef Int
+    -> Property
+propDeletePreservesSiblingsPersistent
+    db
+    nodesCF
+    kvCF
+    counterRef =
+        forAll genUniqueKVs $ \bg ->
+            not (null bg) ==>
+                forAll
+                    ( vectorOf
+                        3
+                        ( (,)
+                            <$> genKeyBytes
+                            <*> genValue
+                        )
+                    )
+                    $ \rawKvs ->
+                        let kvs =
+                                nubBy
+                                    ( \(k1, _) (k2, _) ->
+                                        hashKey k1
+                                            == hashKey k2
+                                    )
+                                    rawKvs
+                            allHashes =
+                                map
+                                    (hashKey . fst)
+                                    bg
+                            noCollision =
+                                all
+                                    ( (`notElem` allHashes)
+                                        . hashKey
+                                        . fst
+                                    )
+                                    kvs
+                        in  length kvs == 3
+                                && noCollision
+                                ==> let ( (keepK, _)
+                                            , (delK, _)
+                                            ) =
+                                                case kvs of
+                                                    (a : b : _) ->
+                                                        (a, b)
+                                                    _ ->
+                                                        error
+                                                            "impossible"
+                                    in  ioProperty $ do
+                                            trie <-
+                                                newPersistentTrie
+                                                    db
+                                                    nodesCF
+                                                    kvCF
+                                                    counterRef
+                                            forM_ bg
+                                                $ uncurry
+                                                    (insert trie)
+                                            forM_ kvs
+                                                $ uncurry
+                                                    (insert trie)
+                                            _ <-
+                                                Cardano.MPFS.Trie.delete
+                                                    trie
+                                                    delK
+                                            mVal <-
+                                                Cardano.MPFS.Trie.lookup
+                                                    trie
+                                                    keepK
+                                            pure
+                                                (isJust mVal)
+
+-- | Random operations on token A don't affect
+-- token B's root.
+propTokenIsolation
+    :: DB
+    -> ColumnFamily
+    -> ColumnFamily
+    -> IORef Int
+    -> Property
+propTokenIsolation
+    db
+    nodesCF
+    kvCF
+    counterRef =
+        forAll genUniqueKVs $ \kvs ->
+            not (null kvs) ==>
+                ioProperty $ do
+                    tm <-
+                        mkPersistentTrieManager
+                            db
+                            nodesCF
+                            kvCF
+                    tidA <- nextTokenId counterRef
+                    tidB <- nextTokenId counterRef
+                    createTrie tm tidA
+                    createTrie tm tidB
+                    withTrie tm tidA $ \trie ->
+                        forM_ kvs
+                            $ uncurry (insert trie)
+                    withTrie tm tidB $ \trie -> do
+                        Root root <- getRoot trie
+                        pure (root === B.empty)
+
+-- | Creating a token that already has data resets
+-- its root to empty.
+propCreateOverwrites
+    :: DB
+    -> ColumnFamily
+    -> ColumnFamily
+    -> IORef Int
+    -> Property
+propCreateOverwrites
+    db
+    nodesCF
+    kvCF
+    counterRef =
+        forAll genUniqueKVs $ \kvs ->
+            not (null kvs) ==>
+                ioProperty $ do
+                    tm <-
+                        mkPersistentTrieManager
+                            db
+                            nodesCF
+                            kvCF
+                    tid <- nextTokenId counterRef
+                    createTrie tm tid
+                    withTrie tm tid $ \trie ->
+                        forM_ kvs
+                            $ uncurry (insert trie)
+                    createTrie tm tid
+                    withTrie tm tid $ \trie -> do
+                        Root root <- getRoot trie
+                        pure (root === B.empty)
+
+-- | Delete then re-insert restores root on a
+-- non-empty persistent trie.
+propDeleteInsertRoundtrip
+    :: DB
+    -> ColumnFamily
+    -> ColumnFamily
+    -> IORef Int
+    -> Property
+propDeleteInsertRoundtrip
+    db
+    nodesCF
+    kvCF
+    counterRef =
+        forAll genUniqueKVs $ \bg ->
+            not (null bg) ==>
+                forAll genKeyBytes $ \keyBs ->
+                    forAll genValue $ \valBs ->
+                        let hk = hashKey keyBs
+                            noCollision =
+                                all
+                                    ( (/= hk)
+                                        . hashKey
+                                        . fst
+                                    )
+                                    bg
+                        in  noCollision ==>
+                                ioProperty $ do
+                                    trie <-
+                                        newPersistentTrie
+                                            db
+                                            nodesCF
+                                            kvCF
+                                            counterRef
+                                    forM_ bg
+                                        $ uncurry
+                                            (insert trie)
+                                    root1 <-
+                                        insert
+                                            trie
+                                            keyBs
+                                            valBs
+                                    _ <-
+                                        Cardano.MPFS.Trie.delete
+                                            trie
+                                            keyBs
+                                    root2 <-
+                                        insert
+                                            trie
+                                            keyBs
+                                            valBs
+                                    pure
+                                        (root1 === root2)
+
+-- ---------------------------------------------------------
+-- Persistence-specific unit tests
+-- ---------------------------------------------------------
+
+persistenceSpec
+    :: DB
+    -> ColumnFamily
+    -> ColumnFamily
+    -> IORef Int
+    -> Spec
+persistenceSpec db nodesCF kvCF counterRef = do
+    it
+        "data persists across DB reopen"
+        persistsAcrossReopen
+
+    it
+        "deleted trie stays deleted after reopen"
+        deletedTrieStaysDeletedAfterReopen
+
+    it
+        "multiple tokens survive reopen"
+        multipleToksSurviveReopen
+
+    it "fruit test vectors on persistent" $ do
+        trie <-
+            newPersistentTrie
+                db
+                nodesCF
+                kvCF
+                counterRef
+        forM_ fruitsTestData
+            $ uncurry (insert trie)
+        root <- getRoot trie
+        encodeHex (unRoot root)
+            `shouldBe` encodeHex
+                expectedFullTrieRoot
+
+-- | Insert data, close DB, reopen, verify data is
+-- still present.
+persistsAcrossReopen :: IO ()
+persistsAcrossReopen =
+    withSystemTempDirectory "reopen" $ \dir -> do
+        -- Phase 1: insert data
+        root1 <-
+            withTestDBAt dir
+                $ \db nodesCF kvCF -> do
+                    mgr <-
+                        mkPersistentTrieManager
+                            db
+                            nodesCF
+                            kvCF
+                    createTrie mgr reopenTidA
+                    withTrie mgr reopenTidA
+                        $ \trie -> do
+                            _ <-
+                                insert
+                                    trie
+                                    "hello"
+                                    "world"
+                            getRoot trie
+        -- Phase 2: reopen and verify
+        withTestDBAt dir $ \db nodesCF kvCF -> do
+            mgr <-
+                mkPersistentTrieManager
+                    db
+                    nodesCF
+                    kvCF
+            -- Register token (no deletion since
+            -- fresh IORef doesn't contain it)
+            createTrie mgr reopenTidA
+            withTrie mgr reopenTidA $ \trie -> do
+                root2 <- getRoot trie
+                root2 `shouldBe` root1
+
+-- | Delete trie, close DB, reopen, verify data is
+-- gone.
+deletedTrieStaysDeletedAfterReopen :: IO ()
+deletedTrieStaysDeletedAfterReopen =
+    withSystemTempDirectory "reopen-del" $ \dir ->
+        do
+            -- Phase 1: insert then delete
+            withTestDBAt dir
+                $ \db nodesCF kvCF -> do
+                    mgr <-
+                        mkPersistentTrieManager
+                            db
+                            nodesCF
+                            kvCF
+                    createTrie mgr reopenTidA
+                    withTrie mgr reopenTidA
+                        $ \trie ->
+                            void
+                                $ insert
+                                    trie
+                                    "hello"
+                                    "world"
+                    deleteTrie mgr reopenTidA
+            -- Phase 2: reopen and verify empty
+            withTestDBAt dir $ \db nodesCF kvCF ->
+                do
+                    mgr <-
+                        mkPersistentTrieManager
+                            db
+                            nodesCF
+                            kvCF
+                    createTrie mgr reopenTidA
+                    withTrie mgr reopenTidA
+                        $ \trie -> do
+                            Root root <-
+                                getRoot trie
+                            root
+                                `shouldBe` B.empty
+
+-- | Two tokens with data, close + reopen, both
+-- intact.
+multipleToksSurviveReopen :: IO ()
+multipleToksSurviveReopen =
+    withSystemTempDirectory "reopen-multi"
+        $ \dir -> do
+            -- Phase 1: insert into both tokens
+            (rootA1, rootB1) <-
+                withTestDBAt dir
+                    $ \db nodesCF kvCF -> do
+                        mgr <-
+                            mkPersistentTrieManager
+                                db
+                                nodesCF
+                                kvCF
+                        createTrie mgr reopenTidA
+                        createTrie mgr reopenTidB
+                        rA <-
+                            withTrie
+                                mgr
+                                reopenTidA
+                                $ \trie -> do
+                                    _ <-
+                                        insert
+                                            trie
+                                            "key-a"
+                                            "val-a"
+                                    getRoot trie
+                        rB <-
+                            withTrie
+                                mgr
+                                reopenTidB
+                                $ \trie -> do
+                                    _ <-
+                                        insert
+                                            trie
+                                            "key-b"
+                                            "val-b"
+                                    getRoot trie
+                        pure (rA, rB)
+            -- Phase 2: reopen and verify both
+            withTestDBAt dir
+                $ \db nodesCF kvCF -> do
+                    mgr <-
+                        mkPersistentTrieManager
+                            db
+                            nodesCF
+                            kvCF
+                    createTrie mgr reopenTidA
+                    createTrie mgr reopenTidB
+                    withTrie mgr reopenTidA
+                        $ \trie -> do
+                            rootA2 <- getRoot trie
+                            rootA2 `shouldBe` rootA1
+                    withTrie mgr reopenTidB
+                        $ \trie -> do
+                            rootB2 <- getRoot trie
+                            rootB2 `shouldBe` rootB1
+                    -- Verify isolation still holds
+                    rootA <-
+                        withTrie mgr reopenTidA
+                            $ \trie -> getRoot trie
+                    rootB <-
+                        withTrie mgr reopenTidB
+                            $ \trie -> getRoot trie
+                    rootA
+                        `shouldSatisfy` (/= rootB)
