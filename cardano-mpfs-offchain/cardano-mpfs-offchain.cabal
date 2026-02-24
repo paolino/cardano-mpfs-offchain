@@ -131,14 +131,14 @@ test-suite unit-tests
     , cardano-ledger-mary
     , cardano-mpfs-offchain
     , containers
-    , hspec                                  >=2.11 && <2.12
+    , hspec                                    >=2.11 && <2.12
     , lens
     , merkle-patricia-forestry
     , merkle-patricia-forestry:mpf-test-lib
     , microlens
     , plutus-core
     , plutus-tx
-    , QuickCheck                             >=2.14 && <2.18
+    , QuickCheck                               >=2.14 && <2.18
     , rocksdb-haskell-jprupp
     , rocksdb-kv-transactions
     , rocksdb-kv-transactions:kv-transactions
