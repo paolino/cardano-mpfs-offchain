@@ -14,6 +14,7 @@ import Data.IORef
     ( modifyIORef'
     , newIORef
     , readIORef
+    , writeIORef
     )
 import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec
@@ -77,7 +78,7 @@ roundtrip hdr pairs =
         pairsRef <- newIORef ([] :: [(ByteString, ByteString)])
         foldBootstrapEntries
             fp
-            (\h -> modifyIORef' hdrRef (const h))
+            (writeIORef hdrRef)
             ( \k v ->
                 modifyIORef'
                     pairsRef
