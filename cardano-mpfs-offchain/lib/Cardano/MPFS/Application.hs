@@ -19,6 +19,7 @@ module Cardano.MPFS.Application
     ) where
 
 import Control.Concurrent.Async (async, cancel)
+import Control.Monad (when)
 
 import Database.KV.Database (mkColumns)
 import Database.KV.RocksDB (mkRocksDBDatabase)
@@ -32,6 +33,10 @@ import Database.RocksDB
     )
 import Ouroboros.Network.Magic (NetworkMagic)
 
+import Cardano.MPFS.Bootstrap
+    ( BootstrapHeader (..)
+    , foldBootstrapEntries
+    )
 import Cardano.MPFS.Context (Context (..))
 import Cardano.MPFS.Indexer.Codecs (allCodecs)
 import Cardano.MPFS.Indexer.Persistent
@@ -48,6 +53,10 @@ import Cardano.MPFS.NodeClient.Connection
 import Cardano.MPFS.Provider.NodeClient
     ( mkNodeClientProvider
     )
+import Cardano.MPFS.State
+    ( Checkpoints (..)
+    , State (..)
+    )
 import Cardano.MPFS.Submitter.N2C (mkN2CSubmitter)
 import Cardano.MPFS.Trie.Persistent
     ( mkPersistentTrieManager
@@ -57,6 +66,10 @@ import Cardano.MPFS.TxBuilder.Config
     )
 import Cardano.MPFS.TxBuilder.Real
     ( mkRealTxBuilder
+    )
+import Cardano.MPFS.Types
+    ( BlockId (..)
+    , SlotNo (..)
     )
 
 -- | Application configuration.
@@ -131,6 +144,10 @@ withApplication cfg action =
                             db
                             nodesCF
                             kvCF
+                    -- Bootstrap seeding on fresh DB
+                    seedBootstrap
+                        (bootstrapFile cfg)
+                        st
                     idx <- mkSkeletonIndexer
                     lsqCh <-
                         newLSQChannel
@@ -171,3 +188,36 @@ withApplication cfg action =
                     error
                         "Expected at least 6 \
                         \column families"
+
+-- | Seed a fresh database from a bootstrap CBOR file.
+-- Sets the initial checkpoint so chain sync resumes
+-- from the bootstrap point. No-op if the database
+-- already has a checkpoint or no bootstrap file is
+-- configured.
+seedBootstrap
+    :: Maybe FilePath -> State IO -> IO ()
+seedBootstrap Nothing _ = pure ()
+seedBootstrap (Just fp) st = do
+    existing <-
+        getCheckpoint (checkpoints st)
+    when (isNothing existing) $ do
+        foldBootstrapEntries
+            fp
+            onHeader
+            (\_k _v -> pure ())
+  where
+    isNothing Nothing = True
+    isNothing _ = False
+    onHeader BootstrapHeader{..} =
+        case bootstrapBlockHash of
+            Nothing ->
+                error
+                    "Bootstrap file has no block \
+                    \hash — discoverBlockHash not \
+                    \yet implemented"
+            Just h ->
+                putCheckpoint
+                    (checkpoints st)
+                    (SlotNo bootstrapSlot)
+                    (BlockId h)
+                    []
