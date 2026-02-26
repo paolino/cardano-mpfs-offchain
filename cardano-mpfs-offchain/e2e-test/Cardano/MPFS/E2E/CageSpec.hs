@@ -13,7 +13,6 @@ module Cardano.MPFS.E2E.CageSpec (spec) where
 import Control.Concurrent (threadDelay)
 import Control.Exception (SomeException, try)
 import Data.ByteString qualified as BS
-import Data.ByteString.Char8 qualified as BS8
 import Data.ByteString.Lazy qualified as BSL
 import Data.ByteString.Short qualified as SBS
 import Data.Map.Strict qualified as Map
@@ -26,7 +25,7 @@ import System.Directory
     , removePathForcibly
     )
 import System.Environment (lookupEnv)
-import System.FilePath (takeDirectory, (</>))
+import System.FilePath ((</>))
 import System.Process (readProcessWithExitCode)
 import Test.Hspec
     ( Spec
@@ -164,22 +163,6 @@ cageFlowSpec bpPath scriptBytes =
             let scriptAddr =
                     cageAddrFromCfg cfg Testnet
 
-            -- Debug: check initial genesis UTxOs
-            genesisUtxosBefore <-
-                queryUTxOs
-                    (provider ctx)
-                    genesisAddr
-            putStrLn
-                $ "Genesis UTxOs before boot: "
-                    <> show
-                        (length genesisUtxosBefore)
-            mapM_
-                ( \(tin, _) ->
-                    putStrLn
-                        $ "  " <> show tin
-                )
-                genesisUtxosBefore
-
             -- Step 1: Boot token
             unsignedBoot <-
                 bootToken
@@ -190,83 +173,12 @@ cageFlowSpec bpPath scriptBytes =
                         genesisSignKey
                         unsignedBoot
 
-            -- Debug: print boot tx outputs
-            let bootOuts =
-                    signedBoot
-                        ^. bodyTxL
-                            . outputsTxBodyL
-            putStrLn
-                $ "Boot tx outputs ("
-                    <> show (length bootOuts)
-                    <> "):"
-            mapM_
-                ( \o ->
-                    putStrLn
-                        $ "  " <> show o
-                )
-                bootOuts
-
             bootResult <-
                 submitTx
                     (submitter ctx)
                     signedBoot
-            putStrLn
-                $ "Submit result: "
-                    <> show bootResult
             assertSubmitted bootResult
-            putStrLn
-                $ "Boot txId: "
-                    <> show (txIdTx signedBoot)
-            putStrLn
-                $ "Cage address: "
-                    <> show scriptAddr
             awaitTx
-            -- Read node log for submit events
-            let nodeLogPath =
-                    takeDirectory sock
-                        </> "node.log"
-            nodeLog <-
-                BS.readFile nodeLogPath
-            let logLines = BS8.lines nodeLog
-                submitLines =
-                    filter
-                        ( \l ->
-                            BS8.isInfixOf
-                                "Submit"
-                                l
-                                || BS8.isInfixOf
-                                    "Reject"
-                                    l
-                                || BS8.isInfixOf
-                                    "Received"
-                                    l
-                                || BS8.isInfixOf
-                                    "Mempool"
-                                    l
-                        )
-                        logLines
-            putStrLn
-                "=== Submit-related node log ==="
-            mapM_ BS8.putStrLn submitLines
-
-            -- Debug: check genesis UTxOs
-            genesisUtxosAfter <-
-                queryUTxOs
-                    (provider ctx)
-                    genesisAddr
-            putStrLn
-                $ "Genesis UTxOs after boot: "
-                    <> show
-                        (length genesisUtxosAfter)
-            mapM_
-                ( \(tin, tout) ->
-                    putStrLn
-                        $ "  "
-                            <> show tin
-                            <> " -> "
-                            <> show tout
-                )
-                genesisUtxosAfter
 
             -- Extract TokenId from mint field
             let tokenId =
@@ -304,9 +216,6 @@ cageFlowSpec bpPath scriptBytes =
                 queryUTxOs
                     (provider ctx)
                     scriptAddr
-            putStrLn
-                $ "Cage UTxOs: "
-                    <> show (length cageUtxos)
             cageUtxos
                 `shouldSatisfy` (not . null)
 
@@ -322,25 +231,10 @@ cageFlowSpec bpPath scriptBytes =
                     addKeyWitness
                         genesisSignKey
                         unsignedReq
-            -- Debug: print request tx
-            let reqBody = signedReq ^. bodyTxL
-            putStrLn
-                $ "Request tx inputs: "
-                    <> show
-                        (reqBody ^. inputsTxBodyL)
-            putStrLn
-                $ "Request tx outputs: "
-                    <> show
-                        ( reqBody
-                            ^. outputsTxBodyL
-                        )
             reqResult <-
                 submitTx
                     (submitter ctx)
                     signedReq
-            putStrLn
-                $ "Request submit: "
-                    <> show reqResult
             assertSubmitted reqResult
             awaitTx
 
