@@ -47,6 +47,7 @@ library
     , cardano-ledger-core
     , cardano-ledger-mary
     , cardano-strict-containers
+    , cardano-utxo-csmt:application
     , cardano-utxo-csmt:library
     , cborg
     , containers                               >=0.6  && <0.8

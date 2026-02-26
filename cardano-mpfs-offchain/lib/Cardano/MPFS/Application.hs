@@ -6,12 +6,20 @@
 -- Top-level wiring module that assembles all
 -- service interfaces into a fully operational
 -- 'Context IO'. The bracket 'withApplication' opens
--- a shared RocksDB database, connects to a local
--- Cardano node via N2C, and builds the production
--- 'Provider', 'Submitter', persistent 'State',
--- persistent 'TrieManager', real 'TxBuilder', and a
--- skeleton 'Indexer'. On exit it cancels the node
--- connection thread and closes the database.
+-- a shared RocksDB database with 10 column families
+-- (4 UTxO + 6 cage\/trie), connects to a local
+-- Cardano node via two N2C connections, and builds
+-- the production 'Provider', 'Submitter', persistent
+-- 'State', persistent 'TrieManager', real
+-- 'TxBuilder', and a 'CageFollower' that processes
+-- blocks from ChainSync. On exit it cancels both
+-- connection threads and closes the database.
+--
+-- Connection 1: ChainSync via cardano-utxo-csmt —
+-- blocks processed by 'CageFollower'.
+-- Connection 2: LocalStateQuery + LocalTxSubmission
+-- for UTxO queries, protocol params, and tx
+-- submission.
 --
 -- Optionally seeds a fresh database from a CBOR
 -- bootstrap file (see "Cardano.MPFS.Core.Bootstrap")
@@ -26,11 +34,13 @@ module Cardano.MPFS.Application
 
       -- * RocksDB setup
     , dbConfig
+    , allColumnFamilies
     , cageColumnFamilies
     ) where
 
 import Control.Concurrent.Async (async, cancel)
 import Control.Monad (when)
+import Control.Tracer (nullTracer)
 
 import Database.KV.Database (mkColumns)
 import Database.KV.RocksDB (mkRocksDBDatabase)
@@ -43,6 +53,31 @@ import Database.RocksDB
     , withDBCF
     )
 import Ouroboros.Network.Magic (NetworkMagic)
+import Ouroboros.Network.Point (WithOrigin (..))
+
+import Cardano.UTxOCSMT.Application.ChainSyncN2C
+    ( mkN2CChainSyncApplication
+    )
+import Cardano.UTxOCSMT.Application.Database.Interface
+    ( State (..)
+    )
+import Cardano.UTxOCSMT.Application.Database.RocksDB
+    ( newRocksDBState
+    )
+import Cardano.UTxOCSMT.Application.Run.Config
+    ( armageddonParams
+    , context
+    , prisms
+    , slotHash
+    )
+import Cardano.UTxOCSMT.Ouroboros.ConnectionN2C
+    ( runLocalNodeApplication
+    )
+import Cardano.UTxOCSMT.Ouroboros.Types
+    ( Point
+    )
+
+import Ouroboros.Network.Block qualified as Network
 
 import Cardano.MPFS.Context (Context (..))
 import Cardano.MPFS.Core.Bootstrap
@@ -52,6 +87,9 @@ import Cardano.MPFS.Core.Bootstrap
 import Cardano.MPFS.Core.Types
     ( BlockId (..)
     , SlotNo (..)
+    )
+import Cardano.MPFS.Indexer.CageFollower
+    ( mkCageIntersector
     )
 import Cardano.MPFS.Indexer.Codecs (allCodecs)
 import Cardano.MPFS.Indexer.Persistent
@@ -68,16 +106,13 @@ import Cardano.MPFS.NodeClient.Connection
 import Cardano.MPFS.Provider.NodeClient
     ( mkNodeClientProvider
     )
-import Cardano.MPFS.State
-    ( Checkpoints (..)
-    , State (..)
-    )
+import Cardano.MPFS.State qualified as CageSt
 import Cardano.MPFS.Submitter.N2C (mkN2CSubmitter)
 import Cardano.MPFS.Trie.Persistent
     ( mkPersistentTrieManager
     )
 import Cardano.MPFS.TxBuilder.Config
-    ( CageConfig
+    ( CageConfig (..)
     )
 import Cardano.MPFS.TxBuilder.Real
     ( mkRealTxBuilder
@@ -111,10 +146,26 @@ dbConfig =
         , bloomFilter = False
         }
 
--- | Column family names and configs for the cage
--- indexer. Order must match the 'AllColumns' GADT
--- constructor order: CageTokens, CageRequests,
--- CageCfg, CageRollbacks, TrieNodes, TrieKV.
+-- | All column families: 4 UTxO (cardano-utxo-csmt)
+-- followed by 6 cage\/trie. Order matters —
+-- cardano-utxo-csmt consumes the first 4 via its
+-- internal 'Columns' GADT, and our 'AllColumns'
+-- GADT consumes the remaining 6.
+-- | All column families: 4 UTxO (cardano-utxo-csmt)
+-- followed by 6 cage\/trie.
+allColumnFamilies :: [(String, Config)]
+allColumnFamilies =
+    utxoColumnFamilies <> cageColumnFamilies
+  where
+    utxoColumnFamilies =
+        [ ("kv", dbConfig)
+        , ("csmt", dbConfig)
+        , ("rollbacks", dbConfig)
+        , ("config", dbConfig)
+        ]
+
+-- | Cage-only column families (6). Used by tests
+-- that don't need the UTxO index.
 cageColumnFamilies :: [(String, Config)]
 cageColumnFamilies =
     [ ("tokens", dbConfig)
@@ -127,10 +178,10 @@ cageColumnFamilies =
 
 -- | Run an action with a fully wired 'Context IO'.
 --
--- Bracket pattern: opens RocksDB for persistent
--- state, opens an N2C connection in the background,
--- wires real Provider, Submitter, persistent State
--- and TrieManager, and tears down on exit.
+-- Opens RocksDB with 10 column families, creates
+-- the UTxO state machine and cage state, starts
+-- two N2C connections (ChainSync + LSQ\/LTxS),
+-- and tears down on exit.
 withApplication
     :: AppConfig
     -- ^ Application configuration
@@ -141,18 +192,19 @@ withApplication cfg action =
     withDBCF
         (dbPath cfg)
         dbConfig
-        cageColumnFamilies
+        allColumnFamilies
         $ \db -> do
-            let columns =
+            -- Cage state: columns 5–10 (skip 4 UTxO CFs)
+            let cageCols =
                     mkColumns
-                        (columnFamilies db)
+                        (drop 4 $ columnFamilies db)
                         allCodecs
-                database =
-                    mkRocksDBDatabase db columns
-            rt <- newRunTransaction database
+                cageDb =
+                    mkRocksDBDatabase db cageCols
+            rt <- newRunTransaction cageDb
             let st = mkPersistentState rt
-            -- Extract trie column families (5th and 6th)
-            case drop 4 (columnFamilies db) of
+            -- Trie: columns 9–10 (skip 8)
+            case drop 8 (columnFamilies db) of
                 (nodesCF : kvCF : _) -> do
                     tm <-
                         mkPersistentTrieManager
@@ -163,6 +215,63 @@ withApplication cfg action =
                     seedBootstrap
                         (bootstrapFile cfg)
                         st
+
+                    -- UTxO state machine (columns 1–4)
+                    ( (utxoUpdate, availPts)
+                        , _runner
+                        ) <-
+                        newRocksDBState
+                            nullTracer
+                            db
+                            prisms
+                            context
+                            slotHash
+                            (\_ _ -> pure ())
+                            armageddonParams
+
+                    let startPts :: [Point]
+                        startPts =
+                            if null availPts
+                                then
+                                    [ Network.Point
+                                        Origin
+                                    ]
+                                else availPts
+
+                    -- CageFollower intersector
+                    let cageIntersector =
+                            mkCageIntersector
+                                ( cfgScriptHash
+                                    $ cageConfig cfg
+                                )
+                                st
+                                tm
+                                rt
+                                -- Placeholder resolver;
+                                -- real resolver needs
+                                -- CBOR encode/decode
+                                (\_ -> pure Nothing)
+                                (Syncing utxoUpdate)
+
+                    -- Connection 1: ChainSync
+                    let chainSyncApp =
+                            mkN2CChainSyncApplication
+                                nullTracer
+                                nullTracer
+                                nullTracer
+                                (\_ -> pure ())
+                                (pure ())
+                                Nothing
+                                cageIntersector
+                                startPts
+                    chainThread <-
+                        async
+                            $ runLocalNodeApplication
+                                (networkMagic cfg)
+                                (socketPath cfg)
+                                chainSyncApp
+
+                    -- Connection 2: LSQ + LTxS
                     idx <- mkSkeletonIndexer
                     lsqCh <-
                         newLSQChannel
@@ -190,31 +299,35 @@ withApplication cfg action =
                                 , trieManager = tm
                                 , txBuilder =
                                     mkRealTxBuilder
-                                        (cageConfig cfg)
+                                        ( cageConfig
+                                            cfg
+                                        )
                                         prov
                                         st
                                         tm
                                 , indexer = idx
                                 }
                     result <- action ctx
+                    cancel chainThread
                     cancel nodeThread
                     pure result
                 _ ->
                     error
-                        "Expected at least 6 \
+                        "Expected at least 10 \
                         \column families"
 
--- | Seed a fresh database from a bootstrap CBOR file.
--- Sets the initial checkpoint so chain sync resumes
--- from the bootstrap point. No-op if the database
--- already has a checkpoint or no bootstrap file is
--- configured.
+-- | Seed a fresh database from a bootstrap CBOR
+-- file. Sets the initial checkpoint so chain sync
+-- resumes from the bootstrap point. No-op if the
+-- database already has a checkpoint or no bootstrap
+-- file is configured.
 seedBootstrap
-    :: Maybe FilePath -> State IO -> IO ()
+    :: Maybe FilePath -> CageSt.State IO -> IO ()
 seedBootstrap Nothing _ = pure ()
 seedBootstrap (Just fp) st = do
     existing <-
-        getCheckpoint (checkpoints st)
+        CageSt.getCheckpoint
+            (CageSt.checkpoints st)
     when (isNothing existing) $ do
         foldBootstrapEntries
             fp
@@ -231,8 +344,8 @@ seedBootstrap (Just fp) st = do
                     \hash — discoverBlockHash not \
                     \yet implemented"
             Just h ->
-                putCheckpoint
-                    (checkpoints st)
+                CageSt.putCheckpoint
+                    (CageSt.checkpoints st)
                     (SlotNo bootstrapSlot)
                     (BlockId h)
                     []
