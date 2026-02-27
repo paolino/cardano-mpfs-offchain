@@ -25,7 +25,6 @@ import Test.Hspec
     , describe
     , expectationFailure
     , it
-    , pendingWith
     , runIO
     , shouldBe
     , shouldSatisfy
@@ -131,18 +130,10 @@ spec = describe "ChainSync E2E" $ do
 -- ---------------------------------------------------------
 
 -- | All ChainSync E2E test cases.
--- Blocked on cardano-utxo-csmt#101: fresh DB
--- crashes on first forwardTipApply.
 chainsyncSpecs :: SBS.ShortByteString -> Spec
 chainsyncSpecs scriptBytes = do
-    let blocked =
-            pendingWith
-                "cardano-utxo-csmt#101: fresh \
-                \DB forwardTipApply crash"
-
     -- Test 1: boot auto-indexes token
     it "boot auto-indexes token" $ do
-        blocked
         withE2E scriptBytes $ \cfg ctx -> do
             -- Submit boot tx
             signedBoot <-
@@ -174,7 +165,6 @@ chainsyncSpecs scriptBytes = do
 
     -- Test 2: request auto-indexes
     it "request auto-indexes" $ do
-        blocked
         withE2E scriptBytes $ \cfg ctx -> do
             -- Submit boot tx
             signedBoot <-
@@ -240,7 +230,6 @@ chainsyncSpecs scriptBytes = do
 
     -- Test 3: checkpoint tracks processed blocks
     it "checkpoint tracks processed blocks" $ do
-        blocked
         withE2E scriptBytes $ \cfg ctx -> do
             -- Submit boot tx to ensure blocks
             -- are being processed
