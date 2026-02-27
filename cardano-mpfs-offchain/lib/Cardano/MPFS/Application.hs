@@ -50,7 +50,8 @@ import Control.Tracer (nullTracer)
 import Database.KV.Database (mkColumns)
 import Database.KV.RocksDB (mkRocksDBDatabase)
 import Database.KV.Transaction
-    ( newRunTransaction
+    ( insert
+    , newRunTransaction
     )
 import Database.RocksDB
     ( Config (..)
@@ -62,6 +63,18 @@ import Ouroboros.Network.Point (WithOrigin (..))
 
 import Cardano.UTxOCSMT.Application.ChainSyncN2C
     ( mkN2CChainSyncApplication
+    )
+import Cardano.UTxOCSMT.Application.Database.Implementation.Armageddon
+    ( ArmageddonParams (..)
+    )
+import Cardano.UTxOCSMT.Application.Database.Implementation.Columns
+    ( Columns (RollbackPoints)
+    )
+import Cardano.UTxOCSMT.Application.Database.Implementation.RollbackPoint
+    ( RollbackPoint (..)
+    )
+import Cardano.UTxOCSMT.Application.Database.Implementation.Transaction
+    ( RunCSMTTransaction (..)
     )
 import Cardano.UTxOCSMT.Application.Database.Interface
     ( State (..)
@@ -223,7 +236,7 @@ withApplication cfg action =
 
                     -- UTxO state machine (columns 1–4)
                     ( (utxoUpdate, availPts)
-                        , _runner
+                        , runner
                         ) <-
                         newRocksDBState
                             nullTracer
@@ -233,6 +246,24 @@ withApplication cfg action =
                             slotHash
                             (\_ _ -> pure ())
                             armageddonParams
+
+                    -- Seed Origin rollback point on
+                    -- fresh DB so forwardTipApply
+                    -- doesn't crash on empty
+                    -- RollbackPoints
+                    -- (cardano-utxo-csmt#101)
+                    when (null availPts) $ do
+                        let ArmageddonParams
+                                {noHash} =
+                                    armageddonParams
+                        txRunTransaction runner
+                            $ insert
+                                RollbackPoints
+                                Origin
+                            $ RollbackPoint
+                                noHash
+                                []
+                                Nothing
 
                     let startPts :: [Point]
                         startPts =
