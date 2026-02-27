@@ -17,6 +17,7 @@ import Data.ByteString qualified as BS
 import Data.ByteString.Short qualified as SBS
 import Data.Map.Strict qualified as Map
 import System.Environment (lookupEnv)
+import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec
     ( Spec
@@ -45,6 +46,9 @@ import Cardano.MPFS.Core.Blueprint
     ( applyVersion
     , extractCompiledCode
     , loadBlueprint
+    )
+import Cardano.MPFS.Core.Bootstrap.Genesis
+    ( generateBootstrapFile
     )
 import Cardano.MPFS.Core.Types
     ( Addr
@@ -913,23 +917,36 @@ withE2E
 withE2E scriptBytes action = do
     gDir <- genesisDir
     withCardanoNode gDir $ \sock startMs ->
-        withSystemTempDirectory "mpfs-e2e" $ \tmpDir -> do
-            let cfg = cageCfg scriptBytes startMs
-                appCfg =
-                    AppConfig
-                        { networkMagic =
-                            devnetMagic
-                        , socketPath = sock
-                        , dbPath = tmpDir
-                        , channelCapacity = 16
-                        , cageConfig = cfg
-                        , bootstrapFile = Nothing
-                        }
-            withApplication appCfg $ \ctx -> do
-                _ <-
-                    queryProtocolParams
-                        (provider ctx)
-                action cfg ctx
+        withSystemTempDirectory "mpfs-e2e"
+            $ \tmpDir -> do
+                let bsFile =
+                        tmpDir </> "bootstrap.cbor"
+                    dbDir =
+                        tmpDir </> "db"
+                    genesisJson =
+                        gDir
+                            </> "shelley-genesis.json"
+                generateBootstrapFile
+                    genesisJson
+                    bsFile
+                let cfg =
+                        cageCfg scriptBytes startMs
+                    appCfg =
+                        AppConfig
+                            { networkMagic =
+                                devnetMagic
+                            , socketPath = sock
+                            , dbPath = dbDir
+                            , channelCapacity = 16
+                            , cageConfig = cfg
+                            , bootstrapFile =
+                                Just bsFile
+                            }
+                withApplication appCfg $ \ctx -> do
+                    _ <-
+                        queryProtocolParams
+                            (provider ctx)
+                    action cfg ctx
 
 -- ---------------------------------------------------------
 -- Helpers

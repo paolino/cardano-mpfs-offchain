@@ -68,6 +68,9 @@ import Cardano.MPFS.Core.Blueprint
     , extractCompiledCode
     , loadBlueprint
     )
+import Cardano.MPFS.Core.Bootstrap.Genesis
+    ( generateBootstrapFile
+    )
 import Cardano.MPFS.Core.Types
     ( Coin (..)
     , ConwayEra
@@ -389,16 +392,26 @@ withE2E scriptBytes action = do
     removePathForcibly rocksDir
     createDirectoryIfMissing True rocksDir
     withCardanoNode gDir $ \sock startMs -> do
+        let bsFile =
+                rocksDir </> "bootstrap.cbor"
+            dbDir =
+                rocksDir </> "db"
+            genesisJson =
+                gDir </> "shelley-genesis.json"
+        generateBootstrapFile
+            genesisJson
+            bsFile
         let cfg = cageCfg scriptBytes startMs
             appCfg =
                 AppConfig
                     { networkMagic =
                         devnetMagic
                     , socketPath = sock
-                    , dbPath = rocksDir
+                    , dbPath = dbDir
                     , channelCapacity = 16
                     , cageConfig = cfg
-                    , bootstrapFile = Nothing
+                    , bootstrapFile =
+                        Just bsFile
                     }
         withApplication appCfg $ \ctx -> do
             _ <-
