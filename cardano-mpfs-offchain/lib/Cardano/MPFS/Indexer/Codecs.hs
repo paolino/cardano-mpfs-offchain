@@ -22,6 +22,9 @@ module Cardano.MPFS.Indexer.Codecs
     ( -- * Column codecs
       allCodecs
 
+      -- * Unified codecs
+    , allUnifiedCodecs
+
       -- * Individual prisms
     , tokenIdPrism
     , tokenStatePrism
@@ -64,11 +67,17 @@ import Control.Lens (Prism', prism')
 import Data.ByteString (ByteString)
 import Data.ByteString.Lazy qualified as BSL
 import Data.ByteString.Short qualified as SBS
+import Data.Dependent.Map qualified as DMap
 import Database.KV.Transaction
     ( Codecs (..)
     , DMap
     , DSum ((:=>))
     , fromPairList
+    )
+
+import Cardano.UTxOCSMT.Application.Database.Implementation.Columns
+    ( Prisms
+    , codecs
     )
 
 import Cardano.MPFS.Core.Types
@@ -85,6 +94,7 @@ import Cardano.MPFS.Indexer.Columns
     ( AllColumns (..)
     , CageCheckpoint (..)
     , CageRollbackEntry (..)
+    , UnifiedColumns (..)
     )
 import Cardano.MPFS.Indexer.Event
     ( CageInverseOp (..)
@@ -125,6 +135,21 @@ allCodecs =
                 , valueCodec = rawBytesPrism
                 }
         ]
+
+-- | Codecs for the unified column set (4 UTxO + 6
+-- cage). Combines the UTxO codecs (from
+-- cardano-utxo-csmt) with the cage codecs, re-keyed
+-- via 'InUtxo' and 'InCage'.
+allUnifiedCodecs
+    :: Prisms slot hash key value
+    -> DMap
+        (UnifiedColumns slot hash key value)
+        Codecs
+allUnifiedCodecs ps =
+    DMap.mapKeysMonotonic InUtxo (codecs ps)
+        `DMap.union` DMap.mapKeysMonotonic
+            InCage
+            allCodecs
 
 -- | Encode/decode 'TokenId' as raw asset name
 -- bytes. No CBOR wrapping — the 'AssetName'

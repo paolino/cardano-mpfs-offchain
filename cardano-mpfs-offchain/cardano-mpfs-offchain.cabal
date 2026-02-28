@@ -55,6 +55,7 @@ library
     , containers                               >=0.6  && <0.8
     , contra-tracer
     , crypton
+    , dependent-map
     , lens
     , memory
     , merkle-patricia-forestry
