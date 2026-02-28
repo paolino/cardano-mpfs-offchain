@@ -52,7 +52,11 @@ import Data.ByteString.Lazy qualified as BSL
 import Database.KV.Database (mkColumns)
 import Database.KV.RocksDB (mkRocksDBDatabase)
 import Database.KV.Transaction
-    ( newRunTransaction
+    ( mapColumns
+    , newRunTransaction
+    )
+import Database.KV.Transaction qualified as L
+    ( RunTransaction (..)
     )
 import Database.RocksDB
     ( Config (..)
@@ -66,14 +70,17 @@ import Cardano.UTxOCSMT.Application.ChainSyncN2C
     ( mkN2CChainSyncApplication
     )
 import Cardano.UTxOCSMT.Application.Database.Implementation.Transaction
-    ( RunCSMTTransaction (..)
+    ( CSMTContext (..)
     , insertCSMT
+    )
+import Cardano.UTxOCSMT.Application.Database.Implementation.Transaction qualified as CSMT
+    ( RunTransaction (..)
     )
 import Cardano.UTxOCSMT.Application.Database.Interface
     ( State (..)
     )
 import Cardano.UTxOCSMT.Application.Database.RocksDB
-    ( newRocksDBState
+    ( createUpdateState
     )
 import Cardano.UTxOCSMT.Application.Run.Config
     ( armageddonParams
@@ -102,7 +109,8 @@ import Cardano.MPFS.Core.Types
 import Cardano.MPFS.Indexer.CageFollower
     ( mkCageIntersector
     )
-import Cardano.MPFS.Indexer.Codecs (allCodecs)
+import Cardano.MPFS.Indexer.Codecs (allUnifiedCodecs)
+import Cardano.MPFS.Indexer.Columns (UnifiedColumns (..))
 import Cardano.MPFS.Indexer.Persistent
     ( mkPersistentState
     )
@@ -207,15 +215,27 @@ withApplication cfg action =
         dbConfig
         allColumnFamilies
         $ \db -> do
-            -- Cage state: columns 5–10 (skip 4 UTxO CFs)
-            let cageCols =
+            -- Unified database over all 10 CFs
+            let unifiedCols =
                     mkColumns
-                        (drop 4 $ columnFamilies db)
-                        allCodecs
-                cageDb =
-                    mkRocksDBDatabase db cageCols
-            rt <- newRunTransaction cageDb
-            let st = mkPersistentState rt
+                        (columnFamilies db)
+                        (allUnifiedCodecs prisms)
+                unifiedDb =
+                    mkRocksDBDatabase db unifiedCols
+            L.RunTransaction run <-
+                newRunTransaction unifiedDb
+
+            -- Project into cage columns (5–10)
+            let cageRt =
+                    L.RunTransaction
+                        (run . mapColumns InCage)
+                st = mkPersistentState cageRt
+
+            -- Project into UTxO columns (1–4)
+            let utxoRt =
+                    CSMT.RunTransaction
+                        (run . mapColumns InUtxo)
+
             -- Trie: columns 9–10 (skip 8)
             case drop 8 (columnFamilies db) of
                 (nodesCF : kvCF : _) -> do
@@ -224,24 +244,24 @@ withApplication cfg action =
                             db
                             nodesCF
                             kvCF
-                    -- UTxO state machine (columns 1–4)
-                    ( (utxoUpdate, availPts)
-                        , runner
-                        ) <-
-                        newRocksDBState
+
+                    -- UTxO state machine
+                    (utxoUpdate, availPts) <-
+                        createUpdateState
                             nullTracer
-                            db
-                            prisms
-                            context
+                            (fromKV context)
+                            (hashing context)
                             slotHash
                             (\_ _ -> pure ())
                             armageddonParams
+                            utxoRt
 
                     -- Bootstrap seeding on fresh DB
                     seedBootstrap
                         (bootstrapFile cfg)
                         st
-                        runner
+                        utxoRt
+                        context
 
                     let startPts :: [Point]
                         startPts =
@@ -266,7 +286,7 @@ withApplication cfg action =
                                             )
                                             st
                                             tm
-                                            rt
+                                            cageRt
                                             (\_ -> pure Nothing)
                                             (Syncing utxoUpdate)
                                     chainSyncApp =
@@ -349,18 +369,20 @@ withApplication cfg action =
 seedBootstrap
     :: Maybe FilePath
     -> CageSt.State IO
-    -> RunCSMTTransaction cf op slot hash BSL.ByteString BSL.ByteString IO
+    -> CSMT.RunTransaction cf op slot hash BSL.ByteString BSL.ByteString IO
+    -> CSMTContext hash BSL.ByteString BSL.ByteString
     -> IO ()
-seedBootstrap Nothing _ _ = pure ()
-seedBootstrap (Just fp) st runner = do
-    existing <-
-        CageSt.getCheckpoint
-            (CageSt.checkpoints st)
-    when (isNothing existing) $ do
-        foldBootstrapEntries
-            fp
-            onHeader
-            onEntry
+seedBootstrap Nothing _ _ _ = pure ()
+seedBootstrap (Just fp) st runner CSMTContext{..} =
+    do
+        existing <-
+            CageSt.getCheckpoint
+                (CageSt.checkpoints st)
+        when (isNothing existing) $ do
+            foldBootstrapEntries
+                fp
+                onHeader
+                onEntry
   where
     isNothing Nothing = True
     isNothing _ = False
@@ -378,7 +400,9 @@ seedBootstrap (Just fp) st runner = do
                     (BlockId h)
                     []
     onEntry k v =
-        txRunTransaction runner
+        CSMT.transact runner
             $ insertCSMT
+                fromKV
+                hashing
                 (BSL.fromStrict k)
                 (BSL.fromStrict v)

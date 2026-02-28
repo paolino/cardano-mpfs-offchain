@@ -24,6 +24,9 @@ module Cardano.MPFS.Indexer.Columns
     ( -- * Column selector
       AllColumns (..)
 
+      -- * Unified column selector
+    , UnifiedColumns (..)
+
       -- * Checkpoint type
     , CageCheckpoint (..)
 
@@ -39,6 +42,10 @@ import Database.KV.Transaction
     , GEq (..)
     , GOrdering (..)
     , KV
+    )
+
+import Cardano.UTxOCSMT.Application.Database.Implementation.Columns
+    ( Columns
     )
 
 import Cardano.MPFS.Core.Types
@@ -127,3 +134,28 @@ instance GCompare AllColumns where
     gcompare TrieNodes TrieKV = GLT
     gcompare TrieKV TrieNodes = GGT
     gcompare TrieKV TrieKV = GEQ
+
+-- | Unified column selector covering both UTxO
+-- (cardano-utxo-csmt) and cage\/trie columns.
+-- Enables a single RocksDB transaction runner for
+-- all 10 column families via 'mapColumns'.
+data UnifiedColumns slot hash key value x where
+    -- | UTxO columns (first 4)
+    InUtxo
+        :: Columns slot hash key value x
+        -> UnifiedColumns slot hash key value x
+    -- | Cage\/trie columns (last 6)
+    InCage
+        :: AllColumns x
+        -> UnifiedColumns slot hash key value x
+
+instance GEq (UnifiedColumns slot hash key value) where
+    geq (InUtxo a) (InUtxo b) = geq a b
+    geq (InCage a) (InCage b) = geq a b
+    geq _ _ = Nothing
+
+instance GCompare (UnifiedColumns slot hash key value) where
+    gcompare (InUtxo a) (InUtxo b) = gcompare a b
+    gcompare (InUtxo _) (InCage _) = GLT
+    gcompare (InCage _) (InUtxo _) = GGT
+    gcompare (InCage a) (InCage b) = gcompare a b
